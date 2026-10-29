@@ -1,0 +1,70 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  ci:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Verify commit trailers on PRs
+        run: |
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            BASE_REF="origin/${{ github.base_ref }}"
+            COMMITS=$(git rev-list "${BASE_REF}..HEAD")
+            echo "Checking PR commits: ${COMMITS}"
+            FAILED=0
+
+            for commit in ${COMMITS}; do
+              echo "Inspecting commit ${commit}..."
+
+              AUTHOR_EMAIL=$(git log -1 --format='%ae' "${commit}")
+              if [ "${AUTHOR_EMAIL}" != "142775745+Lakshmi-Sayyapureddy1819@users.noreply.github.com" ]; then
+                echo "ERROR: Commit ${commit} author email is '${AUTHOR_EMAIL}', expected '142775745+Lakshmi-Sayyapureddy1819@users.noreply.github.com'"
+                FAILED=1
+              fi
+
+              BODY=$(git log -1 --format='%B' "${commit}")
+              for trailer in "Co-authored-by:" "Agent:" "Runtime:" "Model:" "Ticket:"; do
+                if ! echo "${BODY}" | grep -q "${trailer}"; then
+                  echo "ERROR: Commit ${commit} is missing trailer: ${trailer}"
+                  FAILED=1
+                fi
+              done
+            done
+
+            if [ ${FAILED} -ne 0 ]; then
+              echo "Commit trailer validation failed."
+              exit 1
+            fi
+            echo "Commit trailer validation passed."
+          else
+            echo "Push to main detected (bootstrap/merge). Skipping trailer enforcement."
+          fi
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Run lint and tests if app exists
+        run: |
+          if [ -d "app" ]; then
+            python -m pip install --upgrade pip
+            pip install pytest ruff
+            if [ -f "app/pyproject.toml" ]; then
+              pip install -e app/
+            fi
+            ruff check app/
+            pytest app/tests/
+          else
+            echo "app/ directory not present yet. Skipping python tests for Ticket 0."
+          fi

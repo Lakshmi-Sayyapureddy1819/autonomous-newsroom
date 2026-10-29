@@ -1,0 +1,36 @@
+name: gate
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, labeled, unlabeled]
+
+jobs:
+  gate:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: read
+    steps:
+      - name: Verify review and test verdict labels via jq
+        run: |
+          echo "Evaluating gate criteria using event payload at ${GITHUB_EVENT_PATH}..."
+
+          HAS_REVIEW=$(jq -r '[.pull_request.labels[]?.name] | index("review:approved") != null' "${GITHUB_EVENT_PATH}")
+          HAS_TEST=$(jq -r '[.pull_request.labels[]?.name] | index("test:passed") != null' "${GITHUB_EVENT_PATH}")
+
+          echo "review:approved present: ${HAS_REVIEW}"
+          echo "test:passed present: ${HAS_TEST}"
+
+          if [ "${HAS_REVIEW}" = "true" ] && [ "${HAS_TEST}" = "true" ]; then
+            echo "GATE PASSED: Both review:approved and test:passed labels are present on PR."
+            exit 0
+          else
+            echo "GATE BLOCKED: Missing required verdict labels."
+            if [ "${HAS_REVIEW}" != "true" ]; then
+              echo "  - Missing: review:approved (must be set by Copydesk)"
+            fi
+            if [ "${HAS_TEST}" != "true" ]; then
+              echo "  - Missing: test:passed (must be set by Factcheck)"
+            fi
+            exit 1
+          fi
