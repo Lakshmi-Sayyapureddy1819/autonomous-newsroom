@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0">
+  <channel>
+    <title>Recoverable Malformed Feed</title>
+    <link>https://example.com</link>
+    <item>
+      <title>Recoverable Valid Article</title>
+      <link>https://example.com/article/recoverable-1</link>
+      <pubDate>Fri, 30 Oct 2026 09:00:00 GMT</pubDate>
+      <source url="https://example.com">Tech Recover</source>
+    </item>
+    <item>
+      <title>Unclosed Tag Article
+      <link>https://example.com/article/broken
+  </channel>
+</rss>
