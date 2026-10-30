@@ -1,0 +1,30 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0">
+  <channel>
+    <title>Mixed Feed</title>
+    <link>https://example.com</link>
+    <description>Feed with valid, missing title, and invalid link entries</description>
+    <item>
+      <title>Valid Entry One</title>
+      <link>https://example.com/articles/valid-one</link>
+      <pubDate>Fri, 30 Oct 2026 07:00:00 GMT</pubDate>
+      <source url="https://example.com">Example Source</source>
+    </item>
+    <item>
+      <title></title>
+      <link>https://example.com/articles/missing-title</link>
+      <pubDate>Fri, 30 Oct 2026 07:10:00 GMT</pubDate>
+    </item>
+    <item>
+      <title>Invalid Link Entry</title>
+      <link>not-a-valid-http-url</link>
+      <pubDate>Fri, 30 Oct 2026 07:20:00 GMT</pubDate>
+    </item>
+    <item>
+      <title>Valid Entry Two</title>
+      <link>https://example.com/articles/valid-two</link>
+      <pubDate>Fri, 30 Oct 2026 07:30:00 GMT</pubDate>
+      <author>Jane Reporter</author>
+    </item>
+  </channel>
+</rss>

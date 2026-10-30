@@ -1,0 +1,26 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0" xmlns:media="http://search.yahoo.com/mrss/">
+  <channel>
+    <title>AI News Feed</title>
+    <link>https://news.google.com</link>
+    <description>Top artificial intelligence news</description>
+    <item>
+      <title>Breakthrough in Multi-Agent Autonomous Systems</title>
+      <link>https://example.com/ai/multi-agent-breakthrough</link>
+      <pubDate>Fri, 30 Oct 2026 08:30:00 GMT</pubDate>
+      <source url="https://technews.com">Tech News Daily</source>
+    </item>
+    <item>
+      <title>Open Source LLM Efficiency Reaches New Milestone</title>
+      <link>https://example.com/ai/open-source-llm-milestone</link>
+      <pubDate>Fri, 30 Oct 2026 09:15:00 GMT</pubDate>
+      <source url="https://aiinsider.org">AI Insider</source>
+    </item>
+    <item>
+      <title>Robotics Labs Announce Joint Benchmark for Autonomous Reasoning</title>
+      <link>https://example.com/ai/robotics-benchmark</link>
+      <pubDate>Fri, 30 Oct 2026 09:45:00 GMT</pubDate>
+      <source url="https://roboticsweekly.com">Robotics Weekly</source>
+    </item>
+  </channel>
+</rss>
