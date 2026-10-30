@@ -1,0 +1,38 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Distribution / packaging
+*.egg-info/
+.eggs/
+dist/
+build/
+
+# Virtual environments
+.venv/
+env/
+venv/
+ENV/
+
+# Testing & linting
+.pytest_cache/
+.ruff_cache/
+
+# Databases
+*.sqlite3
+*.sqlite3-wal
+*.sqlite3-shm
+*.db
+
+# Environment & Terraform
+.env
+*.tfstate*
+*.tfvars
+!*.tfvars.example
+
+# OS / Editor
+desktop.ini
+.DS_Store
+.vscode/
+.idea/
