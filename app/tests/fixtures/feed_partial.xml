@@ -21,6 +21,10 @@
       <pubDate>Fri, 30 Oct 2026 07:20:00 GMT</pubDate>
     </item>
     <item>
+      <title>Missing Date Entry</title>
+      <link>https://example.com/articles/missing-date</link>
+    </item>
+    <item>
       <title>Valid Entry Two</title>
       <link>https://example.com/articles/valid-two</link>
       <pubDate>Fri, 30 Oct 2026 07:30:00 GMT</pubDate>

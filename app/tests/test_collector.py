@@ -51,19 +51,79 @@ def test_parse_entry_valid() -> None:
 
 def test_parse_entry_invalid_link_or_title() -> None:
     # Missing title
-    assert parse_entry({"link": "https://example.com/art1", "title": "   "}) is None
+    assert (
+        parse_entry(
+            {
+                "link": "https://example.com/art1",
+                "title": "   ",
+                "published_parsed": (2026, 10, 30, 8, 30, 0, 4, 303, 0),
+            }
+        )
+        is None
+    )
     # Missing link
-    assert parse_entry({"link": "", "title": "Some Title"}) is None
+    assert (
+        parse_entry(
+            {
+                "link": "",
+                "title": "Some Title",
+                "published_parsed": (2026, 10, 30, 8, 30, 0, 4, 303, 0),
+            }
+        )
+        is None
+    )
     # Invalid URL scheme
-    assert parse_entry({"link": "ftp://example.com/file", "title": "FTP Link"}) is None
+    assert (
+        parse_entry(
+            {
+                "link": "ftp://example.com/file",
+                "title": "FTP Link",
+                "published_parsed": (2026, 10, 30, 8, 30, 0, 4, 303, 0),
+            }
+        )
+        is None
+    )
     # Relative / malformed URL
-    assert parse_entry({"link": "/relative/path", "title": "Relative Link"}) is None
+    assert (
+        parse_entry(
+            {
+                "link": "/relative/path",
+                "title": "Relative Link",
+                "published_parsed": (2026, 10, 30, 8, 30, 0, 4, 303, 0),
+            }
+        )
+        is None
+    )
+    # Missing or invalid publication date (must reject, no fallback to datetime.now())
+    assert (
+        parse_entry(
+            {
+                "link": "https://example.com/valid-url",
+                "title": "Valid Title",
+                "published": "not a valid date",
+            }
+        )
+        is None
+    )
+    assert (
+        parse_entry(
+            {
+                "link": "https://example.com/valid-url",
+                "title": "Valid Title",
+            }
+        )
+        is None
+    )
 
 
-def test_normalize_iso_datetime_fallback() -> None:
-    # When no date info is present, falls back to a valid ISO UTC timestamp
-    iso_str = normalize_iso_datetime({})
-    assert "T" in iso_str
+def test_normalize_iso_datetime_strict() -> None:
+    # Valid parsed time returns ISO UTC
+    valid_parsed = (2026, 10, 30, 10, 0, 0, 4, 303, 0)
+    assert normalize_iso_datetime({"published_parsed": valid_parsed}) == "2026-10-30T10:00:00+00:00"
+
+    # Missing or unparseable date returns None (no synthetic current time)
+    assert normalize_iso_datetime({}) is None
+    assert normalize_iso_datetime({"published": "unparseable string"}) is None
 
 
 def test_collect_valid_feed_and_deduplication(tmp_path: Path) -> None:
@@ -127,13 +187,13 @@ def test_collect_partial_feed(tmp_path: Path) -> None:
 
     res = collect(feed_url="https://mock.feed/rss", conn=conn, client=client)
     assert res.status == "partial"
-    assert res.fetched == 4
-    assert res.inserted == 2  # 2 of 4 entries were valid
+    assert res.fetched == 5
+    assert res.inserted == 2  # 2 of 5 entries were valid
     assert "feed entries were invalid or skipped" in (res.error or "")
 
     runs = conn.execute("SELECT * FROM runs ORDER BY id DESC LIMIT 1").fetchone()
     assert runs["status"] == "partial"
-    assert runs["fetched"] == 4
+    assert runs["fetched"] == 5
     assert runs["inserted"] == 2
 
     conn.close()
@@ -163,26 +223,62 @@ def test_collect_empty_feed(tmp_path: Path) -> None:
     conn.close()
 
 
-def test_collect_malformed_feed(tmp_path: Path) -> None:
+def test_collect_malformed_feed_unrecoverable(tmp_path: Path) -> None:
     db_path = tmp_path / "malformed.sqlite3"
     init_db(db_path)
     conn = get_connection(db_path)
 
-    # Completely unparseable bytes
-    bad_bytes = b"not xml at all"
+    # Load unrecoverable malformed XML fixture
+    malformed_xml = load_fixture("feed_malformed.xml")
     transport = httpx.MockTransport(
-        lambda request: httpx.Response(200, content=bad_bytes)
+        lambda request: httpx.Response(200, content=malformed_xml)
     )
     client = httpx.Client(transport=transport)
 
     res = collect(feed_url="https://mock.feed/rss", conn=conn, client=client)
     assert res.status == "failed"
-    assert res.fetched == 0
     assert res.inserted == 0
     assert res.error is not None
+    assert "parser" in res.error.lower() or "malformed" in res.error.lower()
 
     runs = conn.execute("SELECT * FROM runs ORDER BY id DESC LIMIT 1").fetchone()
     assert runs["status"] == "failed"
+    assert runs["inserted"] == 0
+    assert runs["error"] is not None
+
+    conn.close()
+
+
+def test_collect_malformed_feed_recoverable_entries(tmp_path: Path) -> None:
+    db_path = tmp_path / "malformed_recoverable.sqlite3"
+    init_db(db_path)
+    conn = get_connection(db_path)
+
+    # Load fixture with recoverable valid entry but malformed XML
+    recoverable_xml = load_fixture("feed_malformed_recoverable.xml")
+    transport = httpx.MockTransport(
+        lambda request: httpx.Response(200, content=recoverable_xml)
+    )
+    client = httpx.Client(transport=transport)
+
+    res = collect(feed_url="https://mock.feed/rss", conn=conn, client=client)
+    # Must be 'partial', never 'success', because bozo parser error is flagged
+    assert res.status == "partial"
+    assert res.fetched >= 1
+    assert res.inserted == 1
+    assert res.error is not None
+    assert "parser" in res.error.lower() or "xml" in res.error.lower()
+
+    # Verify article was persisted
+    articles = conn.execute("SELECT * FROM articles WHERE url LIKE '%recoverable%'").fetchall()
+    assert len(articles) == 1
+    assert articles[0]["title"] == "Recoverable Valid Article"
+
+    # Verify runs table status
+    runs = conn.execute("SELECT * FROM runs ORDER BY id DESC LIMIT 1").fetchone()
+    assert runs["status"] == "partial"
+    assert runs["inserted"] == 1
+    assert runs["error"] is not None
 
     conn.close()
 

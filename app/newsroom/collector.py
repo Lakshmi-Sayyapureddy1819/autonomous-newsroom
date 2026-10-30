@@ -45,8 +45,11 @@ def get_feed_url() -> str:
     return os.environ.get("NEWSROOM_FEED_URL", DEFAULT_FEED_URL)
 
 
-def normalize_iso_datetime(entry: dict) -> str:
-    """Extract and normalize published datetime to ISO 8601 UTC string."""
+def normalize_iso_datetime(entry: dict) -> Optional[str]:
+    """Extract and normalize published datetime to ISO 8601 UTC string.
+
+    Returns None if no valid date can be parsed (does not synthesize current time).
+    """
     parsed_time = entry.get("published_parsed") or entry.get("updated_parsed")
     if parsed_time:
         try:
@@ -68,7 +71,7 @@ def normalize_iso_datetime(entry: dict) -> str:
             except Exception:
                 pass
 
-    return datetime.datetime.now(datetime.timezone.utc).isoformat()
+    return None
 
 
 def extract_source(entry: dict) -> str:
@@ -107,6 +110,8 @@ def parse_entry(entry: dict) -> Optional[ArticleItem]:
 
     source = extract_source(entry)
     published_at = normalize_iso_datetime(entry)
+    if not published_at:
+        return None
 
     return ArticleItem(
         url=url,
@@ -159,9 +164,16 @@ def fetch_and_parse_feed(
         else:
             invalid_count += 1
 
-    error_msg = None
+    error_parts: list[str] = []
+    if parsed.bozo:
+        bozo_msg = f"XML parser warning/error: {parsed.bozo_exception}"
+        logger.warning(bozo_msg)
+        error_parts.append(bozo_msg)
+
     if invalid_count > 0:
-        error_msg = f"{invalid_count} of {raw_count} feed entries were invalid or skipped"
+        error_parts.append(f"{invalid_count} of {raw_count} feed entries were invalid or skipped")
+
+    error_msg = "; ".join(error_parts) if error_parts else None
 
     return articles, raw_count, error_msg
 
