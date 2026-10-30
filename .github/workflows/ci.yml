@@ -24,7 +24,7 @@ jobs:
         run: |
           if [ "${{ github.event_name }}" = "pull_request" ]; then
             BASE_REF="origin/${{ github.base_ref }}"
-            COMMITS=$(git rev-list "${BASE_REF}..HEAD")
+            COMMITS=$(git rev-list --no-merges "${BASE_REF}..HEAD")
             echo "Checking PR commits: ${COMMITS}"
             FAILED=0
 
