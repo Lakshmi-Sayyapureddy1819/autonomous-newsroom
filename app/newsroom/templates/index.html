@@ -1,0 +1,96 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Autonomous Newsroom</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            margin: 20px;
+            background-color: #f4f4f4;
+            color: #333;
+        }
+        .container {
+            max-width: 800px;
+            margin: auto;
+            background: white;
+            padding: 20px;
+            border-radius: 8px;
+            box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+        }
+        h1 {
+            color: #0056b3;
+        }
+        .article-card {
+            border-bottom: 1px solid #eee;
+            padding: 15px 0;
+        }
+        .article-card:last-child {
+            border-bottom: none;
+        }
+        .article-title a {
+            color: #0056b3;
+            text-decoration: none;
+            font-size: 1.2em;
+        }
+        .article-title a:hover {
+            text-decoration: underline;
+        }
+        .article-meta {
+            font-size: 0.9em;
+            color: #666;
+            margin-top: 5px;
+        }
+        .article-summary {
+            margin-top: 10px;
+            line-height: 1.6;
+        }
+        .empty-state {
+            text-align: center;
+            padding: 50px;
+            color: #666;
+        }
+        .footer {
+            margin-top: 30px;
+            font-size: 0.8em;
+            color: #999;
+            text-align: center;
+            border-top: 1px solid #eee;
+            padding-top: 10px;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>Autonomous Newsroom</h1>
+
+        {% if articles %}
+            {% for article in articles %}
+                <div class="article-card">
+                    <h2 class="article-title">
+                        <a href="{{ article.url }}" target="_blank" rel="noopener noreferrer">{{ article.title }}</a>
+                    </h2>
+                    <p class="article-meta">
+                        Source: {{ article.source }} | Tag: {{ article.tag if article.tag else "Other" }} | Published: {{ article.published_at.strftime("%Y-%m-%d %H:%M") }}
+                    </p>
+                    <p class="article-summary">
+                        {{ article.summary if article.summary else "Summary pending" }}
+                    </p>
+                </div>
+            {% endfor %}
+        {% else %}
+            <div class="empty-state">
+                <p>No articles available yet. Please check back later!</p>
+            </div>
+        {% endif %}
+
+        <div class="footer">
+            <p>&copy; {{ current_year }} Autonomous Newsroom. All rights reserved.</p>
+            {% if last_updated_message %}
+                <p>Last updated: {{ last_updated_message }}</p>
+            {% endif %}
+        </div>
+    </div>
+</body>
+</html>
