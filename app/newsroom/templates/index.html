@@ -4,93 +4,372 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Autonomous Newsroom</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Merriweather:wght@700&family=Open+Sans:wght@400;600&display=swap" rel="stylesheet">
     <style>
+        :root {
+            --primary-text-color: #333;
+            --secondary-text-color: #666;
+            --accent-color: #0056b3;
+            --background-color: #f8f8f8;
+            --card-background: #ffffff;
+            --border-color: #e0e0e0;
+            --header-bg: #1a1a1a;
+            --header-text: #ffffff;
+            --nav-link-hover: #007bff;
+        }
+
         body {
-            font-family: Arial, sans-serif;
-            margin: 20px;
-            background-color: #f4f4f4;
-            color: #333;
-        }
-        .container {
-            max-width: 800px;
-            margin: auto;
-            background: white;
-            padding: 20px;
-            border-radius: 8px;
-            box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
-        }
-        h1 {
-            color: #0056b3;
-        }
-        .article-card {
-            border-bottom: 1px solid #eee;
-            padding: 15px 0;
-        }
-        .article-card:last-child {
-            border-bottom: none;
-        }
-        .article-title a {
-            color: #0056b3;
-            text-decoration: none;
-            font-size: 1.2em;
-        }
-        .article-title a:hover {
-            text-decoration: underline;
-        }
-        .article-meta {
-            font-size: 0.9em;
-            color: #666;
-            margin-top: 5px;
-        }
-        .article-summary {
-            margin-top: 10px;
+            font-family: 'Open Sans', sans-serif;
+            margin: 0;
+            background-color: var(--background-color);
+            color: var(--primary-text-color);
             line-height: 1.6;
         }
+
+        .container {
+            max-width: 1200px;
+            margin: auto;
+            padding: 0 20px;
+        }
+
+        header {
+            background-color: var(--header-bg);
+            color: var(--header-text);
+            padding: 15px 0;
+            border-bottom: 5px solid var(--accent-color);
+        }
+
+        .header-content {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            flex-wrap: wrap;
+        }
+
+        .logo a {
+            font-family: 'Merriweather', serif;
+            font-size: 1.8em;
+            font-weight: 700;
+            color: var(--header-text);
+            text-decoration: none;
+        }
+
+        nav ul {
+            list-style: none;
+            margin: 0;
+            padding: 0;
+            display: flex;
+        }
+
+        nav ul li {
+            margin-left: 25px;
+        }
+
+        nav ul li a {
+            color: var(--header-text);
+            text-decoration: none;
+            font-weight: 600;
+            transition: color 0.3s ease;
+        }
+
+        nav ul li a:hover {
+            color: var(--nav-link-hover);
+        }
+
+        .main-content {
+            display: grid;
+            grid-template-columns: 1fr;
+            gap: 30px;
+            padding: 30px 0;
+        }
+
+        @media (min-width: 768px) {
+            .main-content {
+                grid-template-columns: 2fr 1fr; /* Two-column layout for larger screens */
+            }
+        }
+
+        .articles-section {
+            grid-column: 1 / -1; /* Spans full width on small screens */
+        }
+
+        @media (min-width: 768px) {
+            .articles-section {
+                grid-column: 1 / 2; /* Main content column */
+            }
+        }
+
+        .sidebar {
+            background-color: var(--card-background);
+            padding: 20px;
+            border-radius: 8px;
+            box-shadow: 0 2px 4px rgba(0, 0, 0, 0.05);
+        }
+
+        .sidebar h3 {
+            font-family: 'Merriweather', serif;
+            color: var(--primary-text-color);
+            margin-top: 0;
+            padding-bottom: 10px;
+            border-bottom: 1px solid var(--border-color);
+        }
+
+        .featured-article {
+            background-color: var(--card-background);
+            border-radius: 8px;
+            box-shadow: 0 4px 8px rgba(0, 0, 0, 0.1);
+            overflow: hidden;
+            margin-bottom: 30px;
+            display: flex;
+            flex-direction: column;
+        }
+
+        .featured-article-content {
+            padding: 25px;
+        }
+
+        .featured-article h2 {
+            font-family: 'Merriweather', serif;
+            font-size: 2em;
+            margin-top: 0;
+            margin-bottom: 10px;
+            line-height: 1.2;
+        }
+
+        .featured-article h2 a {
+            color: var(--accent-color);
+            text-decoration: none;
+        }
+
+        .featured-article h2 a:hover {
+            text-decoration: underline;
+        }
+
+        .featured-meta {
+            font-size: 0.9em;
+            color: var(--secondary-text-color);
+            margin-bottom: 15px;
+        }
+
+        .featured-summary {
+            font-size: 1.1em;
+            color: var(--primary-text-color);
+        }
+
+        .article-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+            gap: 25px;
+        }
+
+        .article-card {
+            background-color: var(--card-background);
+            border-radius: 8px;
+            box-shadow: 0 2px 4px rgba(0, 0, 0, 0.05);
+            overflow: hidden;
+            display: flex;
+            flex-direction: column;
+            transition: transform 0.2s ease, box-shadow 0.2s ease;
+        }
+
+        .article-card:hover {
+            transform: translateY(-5px);
+            box-shadow: 0 6px 12px rgba(0, 0, 0, 0.1);
+        }
+
+        .article-card-content {
+            padding: 20px;
+            flex-grow: 1;
+        }
+
+        .article-card h3 {
+            font-family: 'Merriweather', serif;
+            font-size: 1.25em;
+            margin-top: 0;
+            margin-bottom: 10px;
+            line-height: 1.3;
+        }
+
+        .article-card h3 a {
+            color: var(--primary-text-color);
+            text-decoration: none;
+        }
+
+        .article-card h3 a:hover {
+            color: var(--accent-color);
+        }
+
+        .article-card-meta {
+            font-size: 0.85em;
+            color: var(--secondary-text-color);
+            margin-bottom: 15px;
+        }
+
+        .article-card-summary {
+            font-size: 0.95em;
+            color: var(--primary-text-color);
+        }
+
         .empty-state {
             text-align: center;
             padding: 50px;
-            color: #666;
+            color: var(--secondary-text-color);
+            background-color: var(--card-background);
+            border-radius: 8px;
+            box-shadow: 0 2px 4px rgba(0, 0, 0, 0.05);
+            grid-column: 1 / -1; /* Center in grid */
         }
-        .footer {
+
+        .status-footer {
             margin-top: 30px;
             font-size: 0.8em;
-            color: #999;
+            color: var(--secondary-text-color);
             text-align: center;
-            border-top: 1px solid #eee;
-            padding-top: 10px;
+            border-top: 1px solid var(--border-color);
+            padding-top: 15px;
+            grid-column: 1 / -1; /* Spans full width */
+        }
+
+        /* Responsive Navigation (Mobile) */
+        .menu-toggle {
+            display: none;
+            flex-direction: column;
+            cursor: pointer;
+            width: 30px;
+            height: 20px;
+            justify-content: space-between;
+        }
+
+        .menu-toggle span {
+            height: 3px;
+            width: 100%;
+            background-color: var(--header-text);
+            border-radius: 2px;
+            transition: all 0.3s ease;
+        }
+
+        @media (max-width: 767px) {
+            nav {
+                order: 3;
+                flex-basis: 100%;
+                display: none;
+                margin-top: 15px;
+            }
+
+            nav.active {
+                display: block;
+            }
+
+            nav ul {
+                flex-direction: column;
+                align-items: flex-start;
+            }
+
+            nav ul li {
+                margin: 10px 0;
+            }
+
+            .menu-toggle {
+                display: flex;
+            }
+
+            .header-content {
+                justify-content: center;
+            }
         }
     </style>
 </head>
 <body>
-    <div class="container">
-        <h1>Autonomous Newsroom</h1>
-
-        {% if articles %}
-            {% for article in articles %}
-                <div class="article-card">
-                    <h2 class="article-title">
-                        <a href="{{ article.url }}" target="_blank" rel="noopener noreferrer">{{ article.title }}</a>
-                    </h2>
-                    <p class="article-meta">
-                        Source: {{ article.source }} | Tag: {{ article.tag if article.tag else "Other" }} | Published: {{ article.published_at.strftime("%Y-%m-%d %H:%M") }}
-                    </p>
-                    <p class="article-summary">
-                        {{ article.summary if article.summary else "Summary pending" }}
-                    </p>
-                </div>
-            {% endfor %}
-        {% else %}
-            <div class="empty-state">
-                <p>No articles available yet. Please check back later!</p>
+    <header>
+        <div class="container header-content">
+            <div class="logo">
+                <a href="/">Autonomous Newsroom</a>
             </div>
-        {% endif %}
+            <div class="menu-toggle" id="mobile-menu">
+                <span></span>
+                <span></span>
+                <span></span>
+            </div>
+            <nav id="main-nav">
+                <ul>
+                    <li><a href="/">Home</a></li>
+                    <li><a href="/rss.xml" target="_blank">RSS Feed</a></li>
+                    <!-- Add more navigation links here if categories are implemented -->
+                </ul>
+            </nav>
+        </div>
+    </header>
 
-        <div class="footer">
+    <div class="container main-content">
+        <div class="articles-section">
+            {% if articles %}
+                {% set featured = articles[0] %}
+                <div class="featured-article">
+                    <div class="featured-article-content">
+                        <h2><a href="{{ featured.url }}" target="_blank" rel="noopener noreferrer">{{ featured.title }}</a></h2>
+                        <p class="featured-meta">
+                            {{ featured.source }} | Published: {{ featured.published_at.strftime("%Y-%m-%d %H:%M UTC") }}
+                        </p>
+                        <p class="featured-summary">
+                            {{ featured.summary if featured.summary and featured.summary | trim != '' else "Summary pending. " ~ (featured.description if featured.description and featured.description | trim != '' else "No description available.") }}
+                        </p>
+                    </div>
+                </div>
+
+                <div class="article-grid">
+                    {% for article in articles[1:] %}
+                        <div class="article-card">
+                            <div class="article-card-content">
+                                <h3><a href="{{ article.url }}" target="_blank" rel="noopener noreferrer">{{ article.title }}</a></h3>
+                                <p class="article-card-meta">
+                                    {{ article.source }} | Published: {{ article.published_at.strftime("%Y-%m-%d %H:%M UTC") }}
+                                </p>
+                                <p class="article-card-summary">
+                                    {{ article.summary if article.summary and article.summary | trim != '' else "Summary pending. " ~ (article.description if article.description and article.description | trim != '' else "No description available.") }}
+                                </p>
+                            </div>
+                        </div>
+                    {% endfor %}
+                </div>
+            {% else %}
+                <div class="empty-state">
+                    <h2>No Articles Available</h2>
+                    <p>The newsroom is currently empty. Articles will appear here once they are collected and processed.</p>
+                    <p>Last updated: {{ last_updated_message if last_updated_message else "never" }}. You can try running the collector to fetch new articles.</p>
+                    <button onclick="window.location.reload();" style="padding: 10px 20px; font-size: 1em; background-color: var(--accent-color); color: white; border: none; border-radius: 5px; cursor: pointer;">Refresh Page</button>
+                </div>
+            {% endif %}
+        </div>
+
+        <!-- Sidebar for categories (if available) - Currently not implemented in backend -->
+        <aside class="sidebar">
+            <h3>Categories</h3>
+            <ul>
+                <li><a href="#">Artificial Intelligence</a></li>
+                <li><a href="#">Technology</a></li>
+                <li><a href="#">World News</a></li>
+                <li><a href="#">Business</a></li>
+                <!-- Dynamically populate categories if backend supports it -->
+            </ul>
+        </aside>
+    </div>
+
+    <footer>
+        <div class="container status-footer">
             <p>&copy; {{ current_year }} Autonomous Newsroom. All rights reserved.</p>
             {% if last_updated_message %}
                 <p>Last updated: {{ last_updated_message }}</p>
             {% endif %}
         </div>
-    </div>
+    </footer>
+
+    <script>
+        document.getElementById('mobile-menu').addEventListener('click', function() {
+            var nav = document.getElementById('main-nav');
+            nav.classList.toggle('active');
+        });
+    </script>
 </body>
 </html>

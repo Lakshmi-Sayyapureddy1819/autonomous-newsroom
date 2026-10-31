@@ -54,8 +54,8 @@ def format_time_ago(dt: str) -> str:
 async def homepage(request: Request, conn: Annotated[sqlite3.Connection, Depends(get_db)]):
     try:
         articles = conn.execute(
-            "SELECT title, url, summary, tag, published_at FROM articles "
-            "WHERE summary IS NOT NULL AND trim(summary) != '' ORDER BY published_at DESC LIMIT ?",
+            "SELECT title, url, summary, description, tag, published_at FROM articles "
+            "ORDER BY published_at DESC LIMIT ?",
             (DEFAULT_LIMIT,),
         ).fetchall()
         articles_hashable = tuple(tuple(item.items()) for item in articles)
@@ -90,8 +90,8 @@ async def homepage(request: Request, conn: Annotated[sqlite3.Connection, Depends
 async def rss_feed(request: Request, conn: Annotated[sqlite3.Connection, Depends(get_db)]):
     try:
         articles = conn.execute(
-            "SELECT title, url, summary, tag, published_at FROM articles "
-            "WHERE summary IS NOT NULL AND trim(summary) != '' ORDER BY published_at DESC LIMIT ?",
+            "SELECT title, url, summary, description, tag, published_at FROM articles "
+            "ORDER BY published_at DESC LIMIT ?",
             (DEFAULT_LIMIT,),
         ).fetchall()
         articles_hashable = tuple(tuple(item.items()) for item in articles)

@@ -20,8 +20,9 @@ CREATE TABLE IF NOT EXISTS articles (
     source TEXT NOT NULL,
     published_at TEXT NOT NULL,
     summary TEXT,
+    description TEXT,
     tag TEXT,
-    summary_model TEXT,
+
     created_at TEXT DEFAULT CURRENT_TIMESTAMP
 );
 
