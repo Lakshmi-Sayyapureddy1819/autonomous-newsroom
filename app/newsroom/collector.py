@@ -30,6 +30,7 @@ class ArticleItem:
     title: str
     source: str
     published_at: str
+    description: Optional[str] = None
 
 
 @dataclass
@@ -113,11 +114,19 @@ def parse_entry(entry: dict) -> Optional[ArticleItem]:
     if not published_at:
         return None
 
+    # Extract description from summary or content
+    description = (entry.get("summary") or entry.get("content", [{}])[0].get("value") or "").strip()
+    if description:
+        clean_description = html.unescape(description)
+    else:
+        clean_description = None
+
     return ArticleItem(
         url=url,
         title=clean_title,
         source=source,
         published_at=published_at,
+        description=clean_description,
     )
 
 
