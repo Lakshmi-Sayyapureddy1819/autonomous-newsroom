@@ -45,10 +45,20 @@ def get_db_path() -> Path:
 
 
 def get_connection(db_path: Optional[Path | str] = None) -> sqlite3.Connection:
-    """Get a SQLite database connection with row factory and WAL mode enabled."""
+    """Get a SQLite database connection with row factory and WAL mode enabled.
+
+    For testing with FastAPI's TestClient, check_same_thread is set to False
+    if the database path is in a temporary directory (e.g., from pytest's tmp_path fixture).
+    """
     target_path = Path(db_path) if db_path is not None else get_db_path()
     target_path.parent.mkdir(parents=True, exist_ok=True)
-    conn = sqlite3.connect(target_path)
+
+    connect_args = {}
+    # Detect if running in a pytest tmp_path (often indicates a testing context)
+    if "PYTEST_CURRENT_TEST" in os.environ and "tmp_path" in str(target_path):
+        connect_args["check_same_thread"] = False
+
+    conn = sqlite3.connect(target_path, **connect_args)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA journal_mode=WAL;")
     return conn
