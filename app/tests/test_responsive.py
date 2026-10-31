@@ -24,7 +24,7 @@ from newsroom.db import get_connection, init_db  # noqa: E402
 from newsroom.main import app  # noqa: E402
 
 WIDTHS = [(320, 700), (360, 740), (375, 800), (414, 860), (768, 1024), (1024, 768), (1440, 900)]
-PAGES = ["/", "/?page=2", "/?tag=Policy", "/?q=zzzznomatch", "/runs", "/no-such-page"]
+PAGES = ["/", "/?page=2", "/?tag=Policy", "/?q=zzzznomatch", "/runs", "/rss.xml", "/no-such-page"]
 
 OVERFLOW_JS = """
 () => {

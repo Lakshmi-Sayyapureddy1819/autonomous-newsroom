@@ -145,7 +145,16 @@ def test_rss_feed_is_a_styled_page_for_browsers_and_xml_for_feed_readers(
 ) -> None:
     seed(
         db_path,
-        [("https://a.example/1", "Feed Story", "2026-10-30T10:00:00+00:00", "A summary.", None, "Tools")],
+        [
+            (
+                "https://a.example/1",
+                "Feed Story",
+                "2026-10-30T10:00:00+00:00",
+                "A summary.",
+                None,
+                "Tools",
+            )
+        ],
         run_finished_at=recent(3),
     )
     browser = client.get("/rss.xml", headers={"accept": "text/html,application/xhtml+xml"})
