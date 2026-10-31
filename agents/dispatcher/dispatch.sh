@@ -50,7 +50,8 @@ dispatchable_issues() {
     '
 }
 
-while IFS=$'\t' read -r issue_number agent status; do
+dispatchable_issues
+exit 0
   [[ -n "${issue_number:-}" ]] || continue
   session="$(session_for "$agent")"
   state_file="$STATE_DIR/issue-${issue_number}-${agent}.state"
