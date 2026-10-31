@@ -6,6 +6,7 @@ import datetime
 import html
 import logging
 import os
+import re
 import sqlite3
 import sys
 from dataclasses import dataclass
@@ -16,6 +17,7 @@ import feedparser
 import httpx
 
 from newsroom.db import get_connection
+from newsroom.env import load_env
 
 DEFAULT_FEED_URL = (
     "https://news.google.com/rss/search?q=artificial+intelligence&hl=en-US&gl=US&ceid=US:en"
@@ -75,6 +77,21 @@ def normalize_iso_datetime(entry: dict) -> Optional[str]:
     return None
 
 
+def strip_description_html(raw: Optional[str], title: str) -> Optional[str]:
+    """Return plain-text description, or None if empty or merely repeating the title.
+
+    Google News descriptions are HTML (an anchor with the headline plus a source tag).
+    """
+    if not raw:
+        return None
+    text = re.sub(r"<[^>]+>", " ", html.unescape(raw))
+    text = " ".join(html.unescape(text).split())
+    title_core = title.rsplit(" - ", 1)[0].strip().lower()
+    if not text or (title_core and text.lower().startswith(title_core)):
+        return None
+    return text
+
+
 def extract_source(entry: dict) -> str:
     """Extract source or publisher name from entry."""
     source_obj = entry.get("source")
@@ -116,10 +133,7 @@ def parse_entry(entry: dict) -> Optional[ArticleItem]:
 
     # Extract description from summary or content
     description = (entry.get("summary") or entry.get("content", [{}])[0].get("value") or "").strip()
-    if description:
-        clean_description = html.unescape(description)
-    else:
-        clean_description = None
+    clean_description = strip_description_html(description, clean_title)
 
     return ArticleItem(
         url=url,
@@ -194,11 +208,17 @@ def persist_articles(conn: sqlite3.Connection, articles: list[ArticleItem]) -> i
         for article in articles:
             cursor = conn.execute(
                 """
-                INSERT INTO articles (url, title, source, published_at)
-                VALUES (?, ?, ?, ?)
+                INSERT INTO articles (url, title, source, published_at, description)
+                VALUES (?, ?, ?, ?, ?)
                 ON CONFLICT(url) DO NOTHING;
                 """,
-                (article.url, article.title, article.source, article.published_at),
+                (
+                    article.url,
+                    article.title,
+                    article.source,
+                    article.published_at,
+                    article.description,
+                ),
             )
             inserted += cursor.rowcount
     return inserted
@@ -305,6 +325,7 @@ def collect(
 
 def main() -> None:
     """CLI entrypoint for collector."""
+    load_env()
     logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
     feed_url = get_feed_url()
     print(f"Starting collector run for: {feed_url}")

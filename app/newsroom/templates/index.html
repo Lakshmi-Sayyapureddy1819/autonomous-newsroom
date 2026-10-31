@@ -87,7 +87,7 @@
 
         @media (min-width: 768px) {
             .main-content {
-                grid-template-columns: 2fr 1fr; /* Two-column layout for larger screens */
+                grid-template-columns: 1fr;
             }
         }
 
@@ -97,7 +97,7 @@
 
         @media (min-width: 768px) {
             .articles-section {
-                grid-column: 1 / 2; /* Main content column */
+                grid-column: 1 / -1;
             }
         }
 
@@ -212,6 +212,11 @@
             color: var(--primary-text-color);
         }
 
+        .tag {
+            font-weight: 600;
+            color: var(--accent-color);
+        }
+
         .empty-state {
             text-align: center;
             padding: 50px;
@@ -310,7 +315,7 @@
                     <div class="featured-article-content">
                         <h2><a href="{{ featured.url }}" target="_blank" rel="noopener noreferrer">{{ featured.title }}</a></h2>
                         <p class="featured-meta">
-                            {{ featured.source }} | Published: {{ featured.published_at.strftime("%Y-%m-%d %H:%M UTC") }}
+                            {{ featured.source }} | Published: {{ featured.published_at.strftime("%Y-%m-%d %H:%M UTC") }}{% if featured.tag %} | <span class="tag">{{ featured.tag }}</span>{% endif %}
                         </p>
                         <p class="featured-summary">
                             {{ featured.summary if featured.summary and featured.summary | trim != '' else "Summary pending. " ~ (featured.description if featured.description and featured.description | trim != '' else "No description available.") }}
@@ -324,7 +329,7 @@
                             <div class="article-card-content">
                                 <h3><a href="{{ article.url }}" target="_blank" rel="noopener noreferrer">{{ article.title }}</a></h3>
                                 <p class="article-card-meta">
-                                    {{ article.source }} | Published: {{ article.published_at.strftime("%Y-%m-%d %H:%M UTC") }}
+                                    {{ article.source }} | Published: {{ article.published_at.strftime("%Y-%m-%d %H:%M UTC") }}{% if article.tag %} | <span class="tag">{{ article.tag }}</span>{% endif %}
                                 </p>
                                 <p class="article-card-summary">
                                     {{ article.summary if article.summary and article.summary | trim != '' else "Summary pending. " ~ (article.description if article.description and article.description | trim != '' else "No description available.") }}
@@ -342,25 +347,13 @@
                 </div>
             {% endif %}
         </div>
-
-        <!-- Sidebar for categories (if available) - Currently not implemented in backend -->
-        <aside class="sidebar">
-            <h3>Categories</h3>
-            <ul>
-                <li><a href="#">Artificial Intelligence</a></li>
-                <li><a href="#">Technology</a></li>
-                <li><a href="#">World News</a></li>
-                <li><a href="#">Business</a></li>
-                <!-- Dynamically populate categories if backend supports it -->
-            </ul>
-        </aside>
     </div>
 
     <footer>
         <div class="container status-footer">
             <p>&copy; {{ current_year }} Autonomous Newsroom. All rights reserved.</p>
             {% if last_updated_message %}
-                <p>Last updated: {{ last_updated_message }}</p>
+                <p>Updated {{ last_updated_message }}</p>
             {% endif %}
         </div>
     </footer>

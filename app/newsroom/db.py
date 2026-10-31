@@ -22,7 +22,7 @@ CREATE TABLE IF NOT EXISTS articles (
     summary TEXT,
     description TEXT,
     tag TEXT,
-
+    summary_model TEXT,
     created_at TEXT DEFAULT CURRENT_TIMESTAMP
 );
 
@@ -69,18 +69,33 @@ def get_connection(
     return conn
 
 
+# Columns added after the first release; applied to databases created before them.
+_ADDED_COLUMNS = {"description": "TEXT", "summary_model": "TEXT"}
+
+
+def _migrate_articles(conn: sqlite3.Connection) -> None:
+    existing = {row["name"] for row in conn.execute("PRAGMA table_info(articles)")}
+    for column, column_type in _ADDED_COLUMNS.items():
+        if column not in existing:
+            conn.execute(f"ALTER TABLE articles ADD COLUMN {column} {column_type}")
+
+
 def init_db(db_path: Optional[Path | str] = None) -> None:
     """Idempotently initialize database schema."""
     conn = get_connection(db_path)
     try:
         with conn:
             conn.executescript(SCHEMA_SQL)
+            _migrate_articles(conn)
     finally:
         conn.close()
 
 
 def main() -> None:
     """CLI entrypoint for database management (e.g. python -m newsroom.db init)."""
+    from newsroom.env import load_env
+
+    load_env()
     if len(sys.argv) > 1 and sys.argv[1] == "init":
         path = get_db_path()
         init_db(path)
