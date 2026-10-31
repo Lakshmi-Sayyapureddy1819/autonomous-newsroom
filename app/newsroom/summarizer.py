@@ -76,9 +76,28 @@ def get_limit() -> int:
         return DEFAULT_LIMIT
 
 
+def _normalize_tag(tag: Optional[str]) -> str:
+    """Normalize tag to fixed taxonomy."""
+    if not tag or not isinstance(tag, str):
+        return "Other"
+    tag = tag.strip()
+    if tag not in VALID_TAGS:
+        return "Other"
+    return tag
+
+
 def parse_summary_response(content: str) -> tuple[str, str]:
-    """Parse JSON or text completion into (summary, tag)."""
+    """Parse JSON or text completion into (summary, tag).
+
+    Raises ValueError for empty, whitespace-only, or malformed responses.
+    Rejects invalid JSON, missing/null/non-string summaries.
+    Accepts genuine non-empty plain text.
+    """
     clean = content.strip()
+    # Reject empty and whitespace-only completions
+    if not clean:
+        raise ValueError("Model completion is empty or whitespace-only.")
+
     # Remove markdown fences if present
     if clean.startswith("```"):
         lines = clean.splitlines()
@@ -88,41 +107,54 @@ def parse_summary_response(content: str) -> tuple[str, str]:
             lines = lines[:-1]
         clean = "\n".join(lines).strip()
 
+    # Reject empty/whitespace after fence removal
+    if not clean:
+        raise ValueError(
+            "Model completion is empty or whitespace-only after markdown fence removal."
+        )
+
     summary: Optional[str] = None
     tag: Optional[str] = None
 
     try:
         data = json.loads(clean)
         if isinstance(data, dict):
-            summary = data.get("summary")
-            tag = data.get("tag")
-    except Exception:
-        # Fallback to regex extraction if JSON was wrapped in other text
-        match = re.search(r"\{.*?\}", clean, re.DOTALL)
-        if match:
-            try:
-                data = json.loads(match.group(0))
-                if isinstance(data, dict):
-                    summary = data.get("summary")
-                    tag = data.get("tag")
-            except Exception:
-                pass
+            summary_candidate = data.get("summary")
+            tag_candidate = data.get("tag")
 
-    if not summary or not isinstance(summary, str):
-        summary = clean.splitlines()[0] if clean else "Summary unavailable."
+            # Validate summary field for JSON responses: must be a non-empty string
+            if not isinstance(summary_candidate, str) or not summary_candidate.strip():
+                raise ValueError(
+                    "JSON response contains missing, null, non-string, "
+                    "or whitespace-only summary field."
+                )
+            summary = summary_candidate
+            tag = tag_candidate
+        else:
+            # Valid JSON but not a dict (e.g., a list or scalar)
+            raise ValueError("JSON response is not a dictionary object.")
+    except json.JSONDecodeError:
+        # If it looks like JSON (starts with '{' or contains braces) but is malformed, reject it
+        if clean.startswith("{") or re.search(r"\{.*?\}", clean, re.DOTALL):
+            raise ValueError("Malformed JSON response detected.")
+        # Otherwise, it's plain text. Accept genuine non-empty plain text.
+        summary = clean.splitlines()[0] if clean.strip() else ""
+        if not summary.strip():
+            raise ValueError("Plain text response is empty or whitespace-only.")
+
+    # Final validation: summary must be a non-empty string
+    if not summary or not isinstance(summary, str) or not summary.strip():
+        raise ValueError("Summary is empty or invalid after all parsing attempts.")
 
     # Normalize summary to single line and cap at 160 chars
     summary = " ".join(summary.split()).strip()
     if len(summary) > 160:
         summary = summary[:157].rstrip() + "..."
+    if not summary.strip():
+        raise ValueError("Final summary is empty or whitespace-only after processing.")
 
     # Normalize tag to fixed taxonomy
-    if not tag or not isinstance(tag, str):
-        tag = "Other"
-    else:
-        tag = tag.strip()
-        if tag not in VALID_TAGS:
-            tag = "Other"
+    tag = _normalize_tag(tag)
 
     return summary, tag
 
@@ -176,6 +208,9 @@ def summarize_article(
 ) -> tuple[Optional[str], Optional[str], Optional[str], Optional[str]]:
     """Attempt primary then fallback summarization.
 
+    Invalid primary output (ValueError) triggers the fallback provider.
+    If both providers return invalid output, returns (None, None, None, error).
+
     Returns: (summary, tag, model_used, error_msg)
     """
     close_client = False
@@ -198,6 +233,8 @@ def summarize_article(
                         try:
                             summary, tag = call_provider(fallback, title, client)
                             return summary, tag, fallback.model, None
+                        except ValueError as fb_val_exc:
+                            return None, None, None, f"Fallback invalid output: {fb_val_exc}"
                         except Exception as fb_exc:
                             return None, None, None, f"Fallback failed: {fb_exc}"
                     else:
@@ -209,12 +246,25 @@ def summarize_article(
                         )
                 else:
                     return None, None, None, f"Primary HTTP error: {exc.response.status_code}"
+            except ValueError as val_exc:
+                logger.warning(f"Primary returned invalid output: {val_exc}. Attempting fallback.")
+                if fallback.is_configured:
+                    try:
+                        summary, tag = call_provider(fallback, title, client)
+                        return summary, tag, fallback.model, None
+                    except ValueError as fb_val_exc:
+                        return None, None, None, f"Fallback invalid output: {fb_val_exc}"
+                    except Exception as fb_exc:
+                        return None, None, None, f"Both providers failed: {fb_exc}"
+                return None, None, None, f"Primary invalid output: {val_exc}"
             except Exception as exc:
                 logger.warning(f"Primary error: {exc}. Attempting fallback.")
                 if fallback.is_configured:
                     try:
                         summary, tag = call_provider(fallback, title, client)
                         return summary, tag, fallback.model, None
+                    except ValueError as fb_val_exc:
+                        return None, None, None, f"Fallback invalid output: {fb_val_exc}"
                     except Exception as fb_exc:
                         return None, None, None, f"Both providers failed: {fb_exc}"
                 return None, None, None, f"Primary failed: {exc}"
@@ -224,6 +274,8 @@ def summarize_article(
             try:
                 summary, tag = call_provider(fallback, title, client)
                 return summary, tag, fallback.model, None
+            except ValueError as fb_val_exc:
+                return None, None, None, f"Fallback invalid output: {fb_val_exc}"
             except Exception as fb_exc:
                 return None, None, None, f"Fallback failed: {fb_exc}"
 

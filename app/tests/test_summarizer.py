@@ -15,11 +15,14 @@ from newsroom.summarizer import (
     DEFAULT_LIMIT,
     DEFAULT_PRIMARY_BASE_URL,
     DEFAULT_PRIMARY_MODEL,
+    ProviderConfig,
+    call_provider,
     get_fallback_config,
     get_limit,
     get_primary_config,
     parse_summary_response,
     summarize,
+    summarize_article,
 )
 
 
@@ -75,24 +78,24 @@ def test_config_defaults(monkeypatch: pytest.MonkeyPatch) -> None:
 
 def test_parse_summary_response() -> None:
     # Valid JSON with known tag
-    valid_json = '{"summary": "A breakthrough in AI chips.", "tag": "Hardware"}'
+    valid_json = '{"summary": "A breakthrough in AI chips.", "tag": "LLMs"}'
     s, t = parse_summary_response(valid_json)
     assert s == "A breakthrough in AI chips."
-    assert t == "Other"  # Hardware not in VALID_TAGS, normalized to Other
+    assert t == "LLMs"
 
     # Valid JSON with known tag
-    valid_json2 = '{"summary": "New LLM reasoning model released.", "tag": "LLMs"}'
+    valid_json2 = '{"summary": "New LLM reasoning model released.", "tag": "Research"}'
     s2, t2 = parse_summary_response(valid_json2)
     assert s2 == "New LLM reasoning model released."
-    assert t2 == "LLMs"
+    assert t2 == "Research"
 
     # Markdown fence wrapped JSON
-    fenced = '```json\n{"summary": "Fenced summary test.", "tag": "Research"}\n```'
+    fenced = '```json\n{"summary": "Fenced summary test.", "tag": "Industry"}\n```'
     s3, t3 = parse_summary_response(fenced)
     assert s3 == "Fenced summary test."
-    assert t3 == "Research"
+    assert t3 == "Industry"
 
-    # Plain text / malformed JSON
+    # Plain text response (no JSON braces) - accepted as plain text
     plain = "This is a plain text summary that is not JSON."
     s4, t4 = parse_summary_response(plain)
     assert s4 == "This is a plain text summary that is not JSON."
@@ -103,6 +106,312 @@ def test_parse_summary_response() -> None:
     s5, _ = parse_summary_response(json.dumps({"summary": long_text, "tag": "Tools"}))
     assert len(s5) <= 160
     assert s5.endswith("...")
+
+
+def test_parse_rejects_empty_and_whitespace() -> None:
+    """Requirement 1: Reject empty and whitespace-only model completions."""
+    with pytest.raises(ValueError, match="empty or whitespace-only"):
+        parse_summary_response("")
+
+    with pytest.raises(ValueError, match="empty or whitespace-only"):
+        parse_summary_response("   ")
+
+    with pytest.raises(ValueError, match="empty or whitespace-only"):
+        parse_summary_response("\n \n\t  ")
+
+    with pytest.raises(ValueError, match="empty or whitespace-only"):
+        parse_summary_response('```\n  \n```')
+
+
+def test_parse_rejects_invalid_json_structure() -> None:
+    """Requirement 2 & 3: Strictly validate JSON summary fields.
+
+    For JSON and fenced JSON, require a non-empty string summary field.
+    Never save invalid JSON as raw summary text.
+    """
+    # JSON missing the summary field entirely
+    with pytest.raises(ValueError, match="missing, null, non-string, or whitespace-only summary"):
+        parse_summary_response('{"tag": "LLMs"}')
+
+    # JSON with null summary
+    with pytest.raises(ValueError, match="missing, null, non-string, or whitespace-only summary"):
+        parse_summary_response('{"summary": null, "tag": "LLMs"}')
+
+    # JSON with non-string summary (integer)
+    with pytest.raises(ValueError, match="missing, null, non-string, or whitespace-only summary"):
+        parse_summary_response('{"summary": 123, "tag": "LLMs"}')
+
+    # JSON with non-string summary (list)
+    with pytest.raises(ValueError, match="missing, null, non-string, or whitespace-only summary"):
+        parse_summary_response('{"summary": ["a", "b"], "tag": "LLMs"}')
+
+    # JSON with empty string summary
+    with pytest.raises(ValueError, match="missing, null, non-string, or whitespace-only summary"):
+        parse_summary_response('{"summary": "", "tag": "LLMs"}')
+
+    # JSON with whitespace-only summary
+    with pytest.raises(ValueError, match="missing, null, non-string, or whitespace-only summary"):
+        parse_summary_response('{"summary": "   ", "tag": "LLMs"}')
+
+    # Malformed JSON (syntax error with braces)
+    with pytest.raises(ValueError, match="Malformed JSON response detected"):
+        parse_summary_response('{"summary": }')
+
+    # Malformed JSON with braces
+    with pytest.raises(ValueError, match="Malformed JSON response detected"):
+        parse_summary_response('{"summary": "test", "tag":')
+
+    # JSON that is not an object (e.g., an array)
+    with pytest.raises(ValueError, match="not a dictionary object"):
+        parse_summary_response('["summary", "tag"]')
+
+    # JSON scalar
+    with pytest.raises(ValueError, match="not a dictionary object"):
+        parse_summary_response('"just a string"')
+
+    # Malformed JSON inside markdown fences
+    with pytest.raises(ValueError, match="Malformed JSON response detected"):
+        parse_summary_response('```json\n{"summary": }\n```')
+
+
+def test_parse_accepts_valid_plain_text() -> None:
+    """Requirement 5: Accept legitimate non-empty plain-text responses."""
+    text = "Breaking news: Major developments in quantum computing research today."
+    s, t = parse_summary_response(text)
+    assert s == "Breaking news: Major developments in quantum computing research today."
+    assert t == "Other"
+
+    # Plain text with multiple lines - uses first line
+    multiline = "First line summary.\nSecond line detail."
+    s2, t2 = parse_summary_response(multiline)
+    assert s2 == "First line summary."
+
+    # Valid JSON still works with tag normalization
+    s3, t3 = parse_summary_response('{"summary": "Test summary", "tag": "Unknown"}')
+    assert s3 == "Test summary"
+    assert t3 == "Other"  # Unknown tag normalized to Other
+
+
+def test_call_provider_raises_on_invalid_output() -> None:
+    """Requirement 4: call_provider propagates ValueError from parse_summary_response."""
+    provider = type(
+        "P", (), {"base_url": "https://fake.example.com", "model": "test", "api_key": "key"}
+    )()
+    client = httpx.Client(
+        transport=httpx.MockTransport(
+            lambda req: httpx.Response(
+                200,
+                json=make_chat_response(""),
+            )
+        )
+    )
+    with pytest.raises(ValueError, match="empty or whitespace-only"):
+        call_provider(provider, "Test Title", client)  # type: ignore
+    client.close()
+
+
+def test_summarize_invalid_primary_fallback_success(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Requirement 4 & 5-6: Invalid primary output triggers fallback provider."""
+    db_path = tmp_path / "invalid_primary_fallback_success.sqlite3"
+    init_db(db_path)
+    conn = get_connection(db_path)
+
+    seed_article(conn, "https://example.com/art1", "Invalid Primary Test")
+
+    monkeypatch.setenv("NEWSROOM_LLM_API_KEY", "primary-key")
+    monkeypatch.setenv("NEWSROOM_LLM_MODEL", "primary-model")
+    monkeypatch.setenv("NEWSROOM_FALLBACK_API_KEY", "fallback-key")
+    monkeypatch.setenv("NEWSROOM_FALLBACK_MODEL", "fallback-model")
+
+    call_count = {"primary": 0, "fallback": 0}
+
+    def mock_handler(request: httpx.Request) -> httpx.Response:
+        auth = request.headers.get("Authorization", "")
+        if "primary-key" in auth:
+            call_count["primary"] += 1
+            # Return invalid JSON to trigger fallback
+            return httpx.Response(
+                200, json=make_chat_response('{"summary": }')
+            )
+        elif "fallback-key" in auth:
+            call_count["fallback"] += 1
+            return httpx.Response(
+                200,
+                json=make_chat_response(
+                    '{"summary": "Fallback summary after invalid primary", "tag": "LLMs"}'
+                )
+            )
+        return httpx.Response(400)
+
+    transport = httpx.MockTransport(mock_handler)
+    client = httpx.Client(transport=transport)
+
+    res = summarize(conn=conn, client=client)
+    assert res.status == "success"
+    assert res.fetched == 1
+    assert res.summarized == 1
+    assert call_count["primary"] == 1
+    assert call_count["fallback"] == 1
+
+    art = conn.execute("SELECT * FROM articles WHERE id = 1").fetchone()
+    assert art["summary"] == "Fallback summary after invalid primary"
+    assert art["tag"] == "LLMs"
+    assert art["summary_model"] == "fallback-model"
+
+    conn.close()
+
+
+def test_summarize_both_providers_invalid(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Requirement 7-9: If both providers return invalid output, leave fields NULL.
+
+    The article remains eligible for retry (summary stays NULL), and the
+    run is marked partial.
+    """
+    db_path = tmp_path / "both_invalid.sqlite3"
+    init_db(db_path)
+    conn = get_connection(db_path)
+
+    seed_article(conn, "https://example.com/art1", "Both Invalid Test")
+
+    monkeypatch.setenv("NEWSROOM_LLM_API_KEY", "primary-key")
+    monkeypatch.setenv("NEWSROOM_FALLBACK_API_KEY", "fallback-key")
+
+    def mock_handler(request: httpx.Request) -> httpx.Response:
+        # Both providers return invalid JSON
+        return httpx.Response(
+            200, json=make_chat_response('{"summary": }')
+        )
+
+    transport = httpx.MockTransport(mock_handler)
+    client = httpx.Client(transport=transport)
+
+    res = summarize(conn=conn, client=client)
+    assert res.status == "partial"
+    assert res.fetched == 1
+    assert res.summarized == 0
+    assert "invalid output" in (res.error or "").lower() or "failed" in (res.error or "").lower()
+
+    art = conn.execute("SELECT * FROM articles WHERE id = 1").fetchone()
+    assert art["summary"] is None
+    assert art["tag"] is None
+    assert art["summary_model"] is None
+
+    runs = conn.execute("SELECT * FROM runs ORDER BY id DESC LIMIT 1").fetchone()
+    assert runs["status"] == "partial"
+    assert runs["summarized"] == 0
+
+    conn.close()
+
+
+def test_summarize_invalid_primary_with_fallback_429(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Invalid primary output (429) triggers HTTP fallback, which also succeeds."""
+    db_path = tmp_path / "invalid_primary_429.sqlite3"
+    init_db(db_path)
+    conn = get_connection(db_path)
+
+    seed_article(conn, "https://example.com/art1", "Invalid Primary 429 Test")
+
+    monkeypatch.setenv("NEWSROOM_LLM_API_KEY", "primary-key")
+    monkeypatch.setenv("NEWSROOM_LLM_MODEL", "primary-model")
+    monkeypatch.setenv("NEWSROOM_FALLBACK_API_KEY", "fallback-key")
+    monkeypatch.setenv("NEWSROOM_FALLBACK_MODEL", "fallback-model")
+
+    def mock_handler(request: httpx.Request) -> httpx.Response:
+        auth = request.headers.get("Authorization", "")
+        if "primary-key" in auth:
+            return httpx.Response(429, json={"error": "Rate limit exceeded"})
+        if "fallback-key" in auth:
+            return httpx.Response(
+                200,
+                json=make_chat_response(
+                    '{"summary": "Fallback after 429 primary", "tag": "Tools"}'
+                )
+            )
+        return httpx.Response(400)
+
+    transport = httpx.MockTransport(mock_handler)
+    client = httpx.Client(transport=transport)
+
+    res = summarize(conn=conn, client=client)
+    assert res.status == "success"
+    assert res.fetched == 1
+    assert res.summarized == 1
+
+    art = conn.execute("SELECT * FROM articles WHERE id = 1").fetchone()
+    assert art["summary"] == "Fallback after 429 primary"
+    assert art["tag"] == "Tools"
+    assert art["summary_model"] == "fallback-model"
+
+    conn.close()
+
+
+def test_summarize_mixed_partial(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """One article succeeds on fallback, another fails both providers."""
+    db_path = tmp_path / "mixed_partial.sqlite3"
+    init_db(db_path)
+    conn = get_connection(db_path)
+
+    seed_article(conn, "https://example.com/art1", "Mixed Article 1")
+    seed_article(conn, "https://example.com/art2", "Mixed Article 2")
+
+    monkeypatch.setenv("NEWSROOM_LLM_API_KEY", "primary-key")
+    monkeypatch.setenv("NEWSROOM_LLM_MODEL", "primary-model")
+    monkeypatch.setenv("NEWSROOM_FALLBACK_API_KEY", "fallback-key")
+    monkeypatch.setenv("NEWSROOM_FALLBACK_MODEL", "fallback-model")
+
+    call_count = {"primary": 0, "fallback": 0}
+
+    def mock_handler(request: httpx.Request) -> httpx.Response:
+        auth = request.headers.get("Authorization", "")
+        if "primary-key" in auth:
+            call_count["primary"] += 1
+            # Primary always returns invalid output
+            return httpx.Response(
+                200, json=make_chat_response('{"summary": }')
+            )
+        elif "fallback-key" in auth:
+            call_count["fallback"] += 1
+            # First fallback call succeeds, second fails (invalid)
+            if call_count["fallback"] == 1:
+                return httpx.Response(
+                    200,
+                    json=make_chat_response(
+                        '{"summary": "Valid fallback summary", "tag": "Research"}'
+                    )
+                )
+            else:
+                return httpx.Response(
+                    200, json=make_chat_response('{"summary": null, "tag": "Research"}')
+                )
+        return httpx.Response(400)
+
+    transport = httpx.MockTransport(mock_handler)
+    client = httpx.Client(transport=transport)
+
+    res = summarize(conn=conn, client=client)
+    assert res.status == "partial"
+    assert res.fetched == 2
+    assert res.summarized == 1
+
+    art1 = conn.execute("SELECT * FROM articles WHERE id = 1").fetchone()
+    assert art1["summary"] == "Valid fallback summary"
+    assert art1["tag"] == "Research"
+    assert art1["summary_model"] == "fallback-model"
+
+    art2 = conn.execute("SELECT * FROM articles WHERE id = 2").fetchone()
+    assert art2["summary"] is None
+    assert art2["tag"] is None
+    assert art2["summary_model"] is None
+
+    conn.close()
 
 
 def test_summarize_zero_candidates(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -409,3 +718,94 @@ def test_summarize_scrubs_secrets_from_error_logs(
     assert secret_key not in error_text
 
     conn.close()
+
+
+def test_summarize_article_invalid_primary_valid_fallback() -> None:
+    """Direct test for summarize_article: invalid primary output triggers valid fallback."""
+    primary = ProviderConfig(
+        name="primary", base_url="https://primary.example.com", model="p-model", api_key="pk"
+    )
+    fallback = ProviderConfig(
+        name="fallback", base_url="https://fallback.example.com", model="f-model", api_key="fk"
+    )
+
+    call_count = {"primary": 0, "fallback": 0}
+
+    def mock_handler(request: httpx.Request) -> httpx.Response:
+        if "pk" in request.headers.get("Authorization", ""):
+            call_count["primary"] += 1
+            return httpx.Response(200, json=make_chat_response('{"summary": }'))
+        if "fk" in request.headers.get("Authorization", ""):
+            call_count["fallback"] += 1
+            return httpx.Response(
+                200,
+                json=make_chat_response(
+                    '{"summary": "Recovered via fallback", "tag": "Tools"}'
+                )
+            )
+        return httpx.Response(400)
+
+    client = httpx.Client(transport=httpx.MockTransport(mock_handler))
+    summary, tag, model_used, err = summarize_article("Test Title", primary, fallback, client)
+    client.close()
+
+    assert summary == "Recovered via fallback"
+    assert tag == "Tools"
+    assert model_used == "f-model"
+    assert err is None
+    assert call_count["primary"] == 1
+    assert call_count["fallback"] == 1
+
+
+def test_summarize_article_invalid_both() -> None:
+    """Direct test for summarize_article: both providers return invalid output."""
+    primary = ProviderConfig(
+        name="primary", base_url="https://primary.example.com", model="p-model", api_key="pk"
+    )
+    fallback = ProviderConfig(
+        name="fallback", base_url="https://fallback.example.com", model="f-model", api_key="fk"
+    )
+
+    def mock_handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json=make_chat_response('{"summary": }'))
+
+    client = httpx.Client(transport=httpx.MockTransport(mock_handler))
+    summary, tag, model_used, err = summarize_article("Test Title", primary, fallback, client)
+    client.close()
+
+    assert summary is None
+    assert tag is None
+    assert model_used is None
+    assert err is not None
+    assert "invalid output" in err.lower() or "failed" in err.lower()
+
+
+def test_summarize_article_fallback_none_on_invalid_primary(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Direct test: invalid primary, fallback also invalid, no error logged for secrets."""
+    primary = ProviderConfig(
+        name="primary", base_url="https://primary.example.com", model="p-model", api_key="pk"
+    )
+    fallback = ProviderConfig(
+        name="fallback", base_url="https://fallback.example.com", model="f-model", api_key="fk"
+    )
+
+    def mock_handler(request: httpx.Request) -> httpx.Response:
+        auth = request.headers.get("Authorization", "")
+        if "pk" in auth:
+            # Invalid JSON response
+            return httpx.Response(200, json=make_chat_response('{"summary": null, "tag": "LLMs"}'))
+        if "fk" in auth:
+            # Empty completion
+            return httpx.Response(200, json=make_chat_response(""))
+        return httpx.Response(400)
+
+    client = httpx.Client(transport=httpx.MockTransport(mock_handler))
+    summary, tag, model_used, err = summarize_article("Test Title", primary, fallback, client)
+    client.close()
+
+    assert summary is None
+    assert tag is None
+    assert model_used is None
+    assert err is not None
