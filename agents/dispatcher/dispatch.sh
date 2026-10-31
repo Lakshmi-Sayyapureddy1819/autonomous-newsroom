@@ -68,7 +68,7 @@ while IFS=$'\t' read -r issue_number agent status; do
   fi
 
   echo "Invoking $agent agent script: $agent_script for PR #$issue_number"
-  python "$agent_script" "$issue_number" &
+  python "$agent_script" "$issue_number"
   agent_pid=$!
   echo "Started $agent agent (PID: $agent_pid) for PR #$issue_number."
 
