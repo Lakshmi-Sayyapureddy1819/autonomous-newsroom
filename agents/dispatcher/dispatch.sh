@@ -31,27 +31,29 @@ session_for() {
 }
 
 dispatchable_issues() {
-  gh issue list --repo "$REPOSITORY" --state open --limit 100 --json number,labels |
-    jq -r '
-      .[]
-      | . as $issue
-      | ([.labels[].name]) as $labels
-      | ([$labels[] | select(startswith("status:"))]) as $statuses
-      | ([$labels[] | select(startswith("agent:"))]) as $agents
-      | select(($statuses | length) == 1 and ($agents | length) == 1)
-      | if (($labels | index("status:ready")) and ($labels | index("agent:reporter"))) then
-          [$issue.number, "reporter", "status:ready"]
-        elif (($labels | index("status:in-review")) and ($labels | index("agent:copydesk"))) then
-          [$issue.number, "copydesk", "status:in-review"]
-        elif (($labels | index("status:in-test")) and ($labels | index("agent:factcheck"))) then
-          [$issue.number, "factcheck", "status:in-test"]
-        else empty end
-      | @tsv
-    '
+  gh issue list --repo "$REPOSITORY" --state open --limit 100 --json number,labels
+  exit 0 # Temporary exit for debugging
+  # Original jq filter follows if we remove this exit
+  # |
+  #   jq -r '
+  #     .[]
+  #     | . as $issue
+  #     | ([.labels[].name]) as $labels
+  #     | ([$labels[] | select(startswith("status:"))]) as $statuses
+  #     | ([$labels[] | select(startswith("agent:"))]) as $agents
+  #     | select(($statuses | length) == 1 and ($agents | length) == 1)
+  #     | if (($labels | index("status:ready")) and ($labels | index("agent:reporter"))) then
+  #         [$issue.number, "reporter", "status:ready"]
+  #       elif (($labels | index("status:in-review")) and ($labels | index("agent:copydesk"))) then
+  #         [$issue.number, "copydesk", "status:in-review"]
+  #       elif (($labels | index("status:in-test")) and ($labels | index("agent:factcheck"))) then
+  #         [$issue.number, "factcheck", "status:in-test"]
+  #       else empty end
+  #     | @tsv
+  #   '
 }
 
-dispatchable_issues
-exit 0
+while IFS=$'\t' read -r issue_number agent status; do
   [[ -n "${issue_number:-}" ]] || continue
   session="$(session_for "$agent")"
   state_file="$STATE_DIR/issue-${issue_number}-${agent}.state"
@@ -69,7 +71,7 @@ exit 0
   fi
 
   echo "Invoking $agent agent script: $agent_script for PR #$issue_number"
-  python "$agent_script" "$issue_number"
+  python "$agent_script" "$issue_number" &
   agent_pid=$!
   echo "Started $agent agent (PID: $agent_pid) for PR #$issue_number."
 
