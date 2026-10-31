@@ -1,0 +1,13 @@
+{% extends "base.html" %}
+{% block title %}{{ code }} &mdash; {{ title }} &middot; Autonomous Newsroom{% endblock %}
+{% block content %}
+        <section class="error-page">
+            <div class="error-code" aria-hidden="true">{{ code }}</div>
+            <h1>{{ title }}</h1>
+            <p>{{ message }}</p>
+            <div class="cta" style="justify-content:center">
+                <a class="btn-primary" href="/">Back to the newsroom</a>
+                <a class="btn-ghost" href="/runs">View the run log</a>
+            </div>
+        </section>
+{% endblock %}

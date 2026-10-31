@@ -1,0 +1,12 @@
+{
+  "agents": {
+    "entries": {
+      "reporter": {
+        "workspace": "/home/newsroom-agent/.openclaw/workspaces/reporter"
+      },
+      "factcheck": {
+        "workspace": "/home/newsroom-agent/.openclaw/workspaces/factcheck"
+      }
+    }
+  }
+}

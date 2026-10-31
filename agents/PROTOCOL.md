@@ -125,8 +125,9 @@ Example Co-authored-by: `reporter (openclaw) <reporter@newsroom.agents>`.
 - Execution mode:
   - Day 1 Local T0: Run manually or via a simple shell polling loop in Git Bash (`bash agents/dispatcher/dispatch.sh`).
   - Production VM (T1–T5): Run every 5 minutes via a systemd timer (`dispatcher.timer`).
-- No LLM, no assignment decisions (editor assigns).
-- Do not start a second invocation if that agent is already running.
+- No LLM. The editor's mechanical duties (re-route a rejected ticket with `attempt+1`, block after 3 attempts, promote the next ready ticket once its `Depends on` tickets are closed) run as code in `agents/dispatcher/editor_lifecycle.py`. The Hermes editor is woken only to author tickets from `docs/brief.md`. A ticket waiting on dependencies carries `agent:editor` and no `status:*`.
+- A failed invocation (non-zero exit, or no label change) is retried; after 3 the ticket becomes `status:blocked`, `agent:editor`.
+- Do not start a second invocation if that agent is already running (per-agent lock).
 - Do not wake anyone for `status:ready-to-merge` or `status:blocked`.
 
 ## Token tracking

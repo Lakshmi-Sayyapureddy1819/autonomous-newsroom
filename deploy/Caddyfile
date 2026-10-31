@@ -1,0 +1,6 @@
+# Rendered by deploy/install.sh: the site placeholder becomes <public-ip>.sslip.io (HTTPS via
+# Let's Encrypt) or ":80" (plain HTTP) when no domain can be determined.
+__SITE__ {
+	encode gzip
+	reverse_proxy 127.0.0.1:8000
+}

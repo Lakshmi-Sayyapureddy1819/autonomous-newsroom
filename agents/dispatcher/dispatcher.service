@@ -1,0 +1,19 @@
+[Unit]
+Description=Dispatch labelled Autonomous Newsroom issues to active agent sessions
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=newsroom-agent
+Group=newsroom-agent
+WorkingDirectory=/opt/newsroom-agent/repo
+EnvironmentFile=-/etc/newsroom-agent.env
+Environment=NEWSROOM_DISPATCH_STATE_DIR=/var/lib/newsroom-agent/dispatcher
+Environment=NEWSROOM_REPO_DIR=/opt/newsroom-agent/repo
+ExecStart=/usr/bin/bash /opt/newsroom-agent/repo/agents/dispatcher/dispatch.sh
+TimeoutStartSec=3600
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=false
+ReadWritePaths=/var/lib/newsroom-agent /home/newsroom-agent /opt/newsroom-agent

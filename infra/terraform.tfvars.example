@@ -1,0 +1,11 @@
+# Copy this file to terraform.tfvars. The real file is ignored by Git.
+# Use the OCID of a Canonical Ubuntu 24.04 aarch64 image in your selected region.
+tenancy_ocid      = "ocid1.tenancy.oc1..REPLACE_ME"
+user_ocid         = "ocid1.user.oc1..REPLACE_ME"
+fingerprint       = "REPLACE_WITH_API_KEY_FINGERPRINT"
+private_key_path  = "~/.oci/oci_api_key.pem"
+region            = "REPLACE_WITH_HOME_REGION"
+compartment_id    = "ocid1.compartment.oc1..REPLACE_ME"
+ubuntu_image_ocid = "ocid1.image.oc1.REPLACE_WITH_REGION.REPLACE_ME"
+ssh_public_key    = "ssh-ed25519 REPLACE_WITH_PUBLIC_KEY"
+ssh_allowed_cidr  = "203.0.113.10/32"

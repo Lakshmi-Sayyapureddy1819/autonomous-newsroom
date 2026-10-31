@@ -201,11 +201,32 @@ def fetch_and_parse_feed(
     return articles, raw_count, error_msg
 
 
+def title_key(title: str, source: str = "") -> str:
+    """Normalized headline used to spot the same story published under different URLs."""
+    suffix = f" - {source}"
+    if source and title.endswith(suffix):
+        title = title[: -len(suffix)]
+    return re.sub(r"[^a-z0-9]+", "", title.lower())
+
+
 def persist_articles(conn: sqlite3.Connection, articles: list[ArticleItem]) -> int:
-    """Insert articles into database with URL deduplication, returning count inserted."""
+    """Insert new articles, skipping duplicate URLs and near-duplicate headlines.
+
+    Returns the number of rows inserted.
+    """
     inserted = 0
+    seen = {
+        title_key(row[0], row[1])
+        for row in conn.execute(
+            "SELECT title, source FROM articles ORDER BY published_at DESC LIMIT 2000"
+        )
+    }
     with conn:
         for article in articles:
+            key = title_key(article.title, article.source)
+            if key and key in seen:
+                continue
+            seen.add(key)
             cursor = conn.execute(
                 """
                 INSERT INTO articles (url, title, source, published_at, description)
@@ -334,6 +355,14 @@ def main() -> None:
         f"Collector completed with status='{result.status}': "
         f"fetched={result.fetched}, inserted={result.inserted}, error={result.error}"
     )
+    from newsroom.hackernews import collect_hacker_news, hn_enabled
+
+    if hn_enabled():
+        hn = collect_hacker_news()
+        print(
+            f"Hacker News completed with status='{hn.status}': "
+            f"fetched={hn.fetched}, inserted={hn.inserted}, error={hn.error}"
+        )
     if result.status == "failed":
         sys.exit(1)
 

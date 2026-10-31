@@ -1,0 +1,11 @@
+[Unit]
+Description=Run the Autonomous Newsroom refresh at boot and every 3 hours
+
+[Timer]
+# Once shortly after boot, then every 3 hours after each run finishes.
+OnBootSec=2min
+OnUnitInactiveSec=3h
+Unit=newsroom-refresh.service
+
+[Install]
+WantedBy=timers.target

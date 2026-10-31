@@ -49,9 +49,13 @@ def main(pr_number):
     # Apply review label and update status
     labels_to_add = [review_status]
     labels_to_remove = ["agent:copydesk", "status:in-review"]
-    new_status_label = "status:in-test" if review_status == "review:approved" else "status:ready"
-    labels_to_add.append(new_status_label)
-    labels_to_add.append("agent:factcheck" if review_status == "review:approved" else "agent:reporter")
+
+    if review_status == "review:approved":
+        labels_to_add.append("status:in-test")
+        labels_to_add.append("agent:factcheck")
+    else:
+        labels_to_add.append("status:ready")
+        labels_to_add.append("agent:reporter")
 
 
     edit_cmd = ["gh", "pr", "edit", str(pr_number)]

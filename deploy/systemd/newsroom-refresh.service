@@ -1,0 +1,19 @@
+[Unit]
+Description=Autonomous Newsroom refresh (collect RSS, then summarize)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=newsroom
+Group=newsroom
+WorkingDirectory=/opt/newsroom/app
+EnvironmentFile=/etc/newsroom.env
+ExecStart=/opt/newsroom/venv/bin/python -m newsroom.collector
+ExecStart=/opt/newsroom/venv/bin/python -m newsroom.summarizer
+TimeoutStartSec=30min
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/newsroom

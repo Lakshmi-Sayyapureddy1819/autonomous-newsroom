@@ -1,0 +1,36 @@
+{% extends "base.html" %}
+{% block title %}Run log &mdash; Autonomous Newsroom{% endblock %}
+{% block content %}
+        <section class="page-title">
+            <h1>Run log</h1>
+            <p>Every time the newsroom collects or summarizes stories, it records a run here. {% if last_updated_message %}Last successful run: {{ last_updated_message }}.{% endif %}</p>
+        </section>
+        {% if runs %}
+        <div class="stats" style="margin-top:22px">
+            <div class="stat"><b>{{ totals.runs }}</b><span>Recent runs</span></div>
+            <div class="stat"><b>{{ totals.success }}</b><span>Successful</span></div>
+            <div class="stat"><b>{{ totals.inserted }}</b><span>Stories added</span></div>
+            <div class="stat"><b>{{ totals.summarized }}</b><span>Summaries written</span></div>
+        </div>
+        <div class="table-wrap">
+            <table class="runs">
+                <thead><tr><th>When</th><th>Status</th><th>Fetched</th><th>Added</th><th>Summarized</th><th>Duration</th><th>Notes</th></tr></thead>
+                <tbody>
+                {% for run in runs %}
+                    <tr>
+                        <td title="{{ run.started_at }}">{{ run.ago }}</td>
+                        <td><span class="badge badge-{{ run.status }}">{{ run.status }}</span></td>
+                        <td>{{ run.fetched }}</td>
+                        <td>{{ run.inserted }}</td>
+                        <td>{{ run.summarized }}</td>
+                        <td>{{ run.duration }}</td>
+                        <td class="err">{{ run.error or "" }}</td>
+                    </tr>
+                {% endfor %}
+                </tbody>
+            </table>
+        </div>
+        {% else %}
+        <div class="empty"><div class="icon" aria-hidden="true">&#128203;</div><h2>No runs yet</h2><p>Run the collector to record the first one.</p></div>
+        {% endif %}
+{% endblock %}

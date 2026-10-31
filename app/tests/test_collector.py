@@ -327,3 +327,19 @@ def test_collect_network_timeout(tmp_path: Path) -> None:
     assert runs["status"] == "failed"
 
     conn.close()
+
+
+def test_strip_description_html_removes_markup_and_title_repeats() -> None:
+    from newsroom.collector import strip_description_html
+
+    raw = (
+        '<a href="https://example.com/x" target="_blank">Big AI News Today</a>'
+        '&nbsp;&nbsp;<font color="#6f6f6f">Example Source</font>'
+    )
+    # Only repeats the headline plus source -> nothing useful to show.
+    assert strip_description_html(raw, "Big AI News Today - Example Source") is None
+    assert strip_description_html("<p>Real <b>body</b> text &amp; more</p>", "Other") == (
+        "Real body text & more"
+    )
+    assert strip_description_html("", "Other") is None
+    assert strip_description_html(None, "Other") is None
