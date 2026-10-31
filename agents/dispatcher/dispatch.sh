@@ -14,16 +14,12 @@ require_command() {
   }
 }
 
-for command_name in gh jq flock; do
+for command_name in gh jq; do
   require_command "$command_name"
 done
 
 mkdir -p "$STATE_DIR"
-exec 9>"$LOCK_FILE"
-if ! flock -n 9; then
-  echo "Another dispatcher run is active; exiting."
-  exit 0
-fi
+
 
 session_for() {
   case "$1" in
