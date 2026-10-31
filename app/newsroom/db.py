@@ -44,7 +44,9 @@ def get_db_path() -> Path:
     return Path(path_str)
 
 
-def get_connection(db_path: Optional[Path | str] = None) -> sqlite3.Connection:
+def get_connection(
+    db_path: Optional[Path | str] = None, check_same_thread: bool = True
+) -> sqlite3.Connection:
     """Get a SQLite database connection with row factory and WAL mode enabled.
 
     For testing with FastAPI's TestClient, check_same_thread is set to False
@@ -54,6 +56,8 @@ def get_connection(db_path: Optional[Path | str] = None) -> sqlite3.Connection:
     target_path.parent.mkdir(parents=True, exist_ok=True)
 
     connect_args = {}
+    if not check_same_thread:
+        connect_args["check_same_thread"] = False
     # Detect if running in a pytest tmp_path (often indicates a testing context)
     if "PYTEST_CURRENT_TEST" in os.environ and "tmp_path" in str(target_path):
         connect_args["check_same_thread"] = False

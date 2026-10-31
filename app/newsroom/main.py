@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import datetime
 import sqlite3
+from pathlib import Path
 from typing import Annotated, Generator
 
 from fastapi import Depends, FastAPI, Request, Response
@@ -14,7 +15,7 @@ from newsroom.db import get_connection
 app = FastAPI()
 
 # Configure Jinja2 templates
-templates = Jinja2Templates(directory="app/newsroom/templates")
+templates = Jinja2Templates(directory=Path(__file__).resolve().parent / "templates")
 
 # Constants
 DEFAULT_LIMIT = 20
@@ -22,7 +23,8 @@ DEFAULT_LIMIT = 20
 
 # Database dependency
 def get_db() -> Generator[sqlite3.Connection, None, None]:
-    conn = get_connection()
+    # FastAPI runs this dependency and the endpoint in different worker threads.
+    conn = get_connection(check_same_thread=False)
     try:
         yield conn
     finally:
