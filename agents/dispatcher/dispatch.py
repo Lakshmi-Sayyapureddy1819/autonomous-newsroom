@@ -14,7 +14,8 @@ Each tick:
 Environment (all optional):
   GITHUB_REPOSITORY, NEWSROOM_DISPATCH_STATE_DIR, NEWSROOM_REPO_DIR,
   NEWSROOM_CMD_<AGENT> (shell-style template with {issue} and {prompt}),
-  NEWSROOM_AGENT_TIMEOUT (s, default 900), NEWSROOM_MAX_TURNS (default 40),
+  NEWSROOM_REVIEW_MODE=deterministic (copydesk/factcheck run agents/scripts/*_agent.py, no LLM;
+  default is the LLM agents), NEWSROOM_AGENT_TIMEOUT (s, default 900), NEWSROOM_MAX_TURNS (default 40),
   NEWSROOM_RETRY_BACKOFF (s, default 60), NEWSROOM_STALE_MINUTES (default 45).
 """
 
@@ -42,6 +43,7 @@ WAKE = {  # (status, agent) -> wake. in-progress is only woken when stale.
     ("status:in-review", "agent:copydesk"): "copydesk",
     ("status:in-test", "agent:factcheck"): "factcheck",
 }
+DETERMINISTIC = {"copydesk": "copydesk_agent.py", "factcheck": "factcheck_agent.py"}
 SECRET = re.compile(r"(ghp_|github_pat_|sk-|AIza)[A-Za-z0-9_\-]{8,}")
 
 
@@ -62,13 +64,24 @@ class Config:
         self.max_turns = int(env.get("NEWSROOM_MAX_TURNS", "40"))
         self.backoff = int(env.get("NEWSROOM_RETRY_BACKOFF", "60"))
         self.stale = int(env.get("NEWSROOM_STALE_MINUTES", "45")) * 60
+        self.deterministic = env.get("NEWSROOM_REVIEW_MODE", "").lower() == "deterministic"
         self.env = env
 
-    def command(self, agent: str, issue: str, prompt: str) -> list[str]:
+    def needs_pr(self, agent: str) -> bool:
+        """True when this agent's command takes a PR number ({pr}) instead of an Issue."""
         override = self.env.get(f"NEWSROOM_CMD_{agent.upper()}")
         if override:
-            argv = [a.replace("{issue}", issue).replace("{prompt}", prompt)
+            return "{pr}" in override
+        return self.deterministic and agent in DETERMINISTIC
+
+    def command(self, agent: str, issue: str, prompt: str, pr: str = "") -> list[str]:
+        override = self.env.get(f"NEWSROOM_CMD_{agent.upper()}")
+        if override:
+            argv = [a.replace("{issue}", issue).replace("{pr}", pr).replace("{prompt}", prompt)
                     for a in shlex.split(override)]
+        elif self.deterministic and agent in DETERMINISTIC:
+            argv = [sys.executable, str(self.root / "agents" / "scripts" / DETERMINISTIC[agent]),
+                    pr]
         elif agent in ("reporter", "factcheck"):  # OpenClaw
             argv = ["openclaw", "agent", "--agent", agent, "--message", prompt,
                     "--timeout", str(self.timeout)]
@@ -237,6 +250,15 @@ class Dispatcher:
             self.gh.comment("issue", a["issue"], a["comment"])
         return bool(actions)
 
+    def resolve_pr(self, issue: int) -> tuple[int | None, str]:
+        """The one open PR that closes `issue`, or (None, reason)."""
+        prs = self._linked_prs(issue)
+        if len(prs) == 1:
+            return prs[0], ""
+        if not prs:
+            return None, f"no open PR closes #{issue}"
+        return None, f"ambiguous: open PRs {sorted(prs)} all close #{issue}"
+
     def _linked_prs(self, issue: int) -> list[int]:
         return [pr["number"] for pr in self.gh.open_prs()
                 if any(r["number"] == issue for r in pr.get("closingIssuesReferences") or [])]
@@ -302,7 +324,15 @@ class Dispatcher:
             return
         try:
             self.log(f"Waking {agent} for {key} ({sig})")
-            code, output = self.run_agent(agent, str(number), prompt_for(agent, number, t))
+            prompt, extra, code, output = prompt_for(agent, number, t), {}, None, ""
+            if self.cfg.needs_pr(agent):
+                pr, why = self.resolve_pr(number)
+                if pr is None:
+                    code, output = 2, why  # counts as a failed attempt; agent not started
+                else:
+                    extra = {"pr": str(pr)}
+            if code is None:
+                code, output = self.run_agent(agent, str(number), prompt, **extra)
             st["last_attempt"] = self.now()
             st["rate_limited"] = bool(re.search(r"\b(402|429)\b", output))
             moved = self._labels_moved(number, sig) if t else code == 0
@@ -346,8 +376,9 @@ class Dispatcher:
         st["escalated"] = True
         self.state.save(key, st)
 
-    def _run_subprocess(self, agent: str, issue: str, prompt: str) -> tuple[int, str]:
-        argv = self.cfg.command(agent, issue, prompt)
+    def _run_subprocess(self, agent: str, issue: str, prompt: str,
+                        pr: str = "") -> tuple[int, str]:
+        argv = self.cfg.command(agent, issue, prompt, pr)
         log = self.state.dir / "logs" / f"{agent}-{issue}-{int(self.now())}.log"
         try:
             out = subprocess.run(argv, cwd=self.cfg.root, capture_output=True, text=True,

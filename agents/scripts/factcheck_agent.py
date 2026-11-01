@@ -1,47 +1,21 @@
-"""Run independent lint and test checks for a GitHub pull request."""
+"""Deterministic Factcheck: lint + test the exact head SHA of one pull request (no LLM).
+
+Usage: factcheck_agent.py <PR_NUMBER>   (the dispatcher resolves Issue -> PR for you)
+
+Only writes a test:* verdict from a real ruff/pytest run on the PR head commit. If the checks
+cannot run (no uv, fetch failed, head moved) it writes NO verdict, comments, and exits 2 so the
+dispatcher counts a failed attempt. Requires review:approved, a green `ci` and one linked Issue.
+"""
 
 from __future__ import annotations
 
-import json
 import shutil
-import subprocess
 import sys
 import tempfile
 
+import ghlib
 
-def run_command(cmd: list[str], *, cwd: str | None = None) -> subprocess.CompletedProcess[str]:
-    """Run an argument-vector command without invoking a shell."""
-    result = subprocess.run(cmd, capture_output=True, text=True, check=False, cwd=cwd)
-    if result.returncode != 0:
-        print(f"Command failed ({result.returncode}): {cmd!r}", file=sys.stderr)
-        if result.stdout:
-            print(result.stdout, file=sys.stderr, end="")
-        if result.stderr:
-            print(result.stderr, file=sys.stderr, end="")
-    elif result.stdout:
-        print(result.stdout, end="")
-    return result
-
-
-def get_pr_details(pr_number: int) -> dict | None:
-    """Fetch PR metadata and the exact head revision through gh."""
-    result = run_command(
-        [
-            "gh",
-            "pr",
-            "view",
-            str(pr_number),
-            "--json",
-            "number,title,body,labels,headRefName,headRefOid,baseRefName,statusCheckRollup",
-        ]
-    )
-    if result.returncode != 0:
-        return None
-    try:
-        return json.loads(result.stdout)
-    except json.JSONDecodeError as error:
-        print(f"Could not parse gh PR response: {error}", file=sys.stderr)
-        return None
+run_command = ghlib.run
 
 
 def run_local_tests(pr_number: int, expected_head: str) -> tuple[bool | None, str]:
@@ -88,16 +62,7 @@ def run_local_tests(pr_number: int, expected_head: str) -> tuple[bool | None, st
 
             print("Factcheck Agent: Running pytest on the PR head.")
             tests = run_command(
-                [
-                    uv,
-                    "run",
-                    "--project",
-                    "app",
-                    "--extra",
-                    "dev",
-                    "pytest",
-                    "app/tests/",
-                ],
+                [uv, "run", "--project", "app", "--extra", "dev", "pytest", "app/tests/"],
                 cwd=worktree,
             )
             if tests.returncode != 0:
@@ -118,80 +83,57 @@ def run_local_tests(pr_number: int, expected_head: str) -> tuple[bool | None, st
         return check_result, detail
 
 
-def main(pr_number: int) -> None:
+def main(pr_number: int) -> int:
     print(f"Factcheck Agent: Validating PR #{pr_number}")
-
-    pr = get_pr_details(pr_number)
+    pr = ghlib.pr_details(pr_number)
     if not pr:
-        print(f"Error: Could not retrieve PR #{pr_number} details.", file=sys.stderr)
-        sys.exit(1)
+        print(f"Could not retrieve PR #{pr_number}.", file=sys.stderr)
+        return 1
+    issue = ghlib.linked_issue(pr)
+    if (
+        "review:approved" not in ghlib.label_names(pr)
+        or ghlib.ci_state(pr) != "success"
+        or issue is None
+    ):
+        print("Factcheck Agent: PR not eligible (needs review:approved, green ci and one "
+              "linked Issue); no verdict written.", file=sys.stderr)
+        return 2
 
-    review_approved = any(
-        label.get("name") == "review:approved" for label in pr.get("labels", [])
-    )
-    ci_passed = any(
-        check.get("name") == "ci" and check.get("conclusion") == "SUCCESS"
-        for check in pr.get("statusCheckRollup", [])
-    )
-    if not review_approved or not ci_passed:
-        print(
-            "Factcheck Agent: PR is not eligible for testing (Copydesk approval and green CI are required); "
-            "no verdict or labels were changed.",
-            file=sys.stderr,
-        )
-        sys.exit(2)
-
-    expected_head = pr.get("headRefOid")
-    if not expected_head:
-        result, detail = None, "Could not get the PR head SHA; no local checks were run."
+    sha = pr.get("headRefOid")
+    if sha:
+        result, detail = run_local_tests(pr_number, sha)
     else:
-        result, detail = run_local_tests(pr_number, expected_head)
-
+        result, detail = None, "Could not get the PR head SHA; no local checks were run."
+    if result is not None:  # the head must not have moved while we were testing
+        now = ghlib.pr_details(pr_number)
+        if not now or now.get("headRefOid") != sha:
+            result, detail = None, "PR head changed during testing; result discarded."
     if result is None:
-        comment_body = f"Factcheck Agent: PR #{pr_number} could not be independently tested. {detail} No test verdict was applied."
-        run_command(["gh", "pr", "comment", str(pr_number), "--body", comment_body])
-        sys.exit(2)
+        note = (f"Factcheck Agent: PR #{pr_number} could not be independently tested. "
+                f"{detail} No test verdict was applied.")
+        ghlib.run(["gh", "pr", "comment", str(pr_number), "--body", note])
+        return 2
 
     if result:
-        test_status = "test:passed"
-        comment_body = (
-            f"Factcheck Agent: PR #{pr_number} ({expected_head}) validated. {detail} "
-            f"Applying '{test_status}' label."
-        )
-        next_status = "status:ready-to-merge"
-        next_owner = None
+        label, gone, verb = "test:passed", "test:failed", "validated"
+        issue_add, issue_remove = ["status:ready-to-merge"], ["status:in-test", "agent:factcheck"]
+        target = "human"
     else:
-        test_status = "test:failed"
-        comment_body = (
-            f"Factcheck Agent: PR #{pr_number} ({expected_head}) failed independent checks. {detail} "
-            f"Applying '{test_status}' label."
-        )
-        next_status = "status:ready"
-        next_owner = "agent:editor"
-
-    labels_to_add = [test_status, next_status]
-    if next_owner:
-        labels_to_add.append(next_owner)
-    labels_to_remove = ["agent:factcheck", "status:in-test"]
-
-    edit_cmd = ["gh", "pr", "edit", str(pr_number)]
-    for label in labels_to_add:
-        edit_cmd.extend(["--add-label", label])
-    for label in labels_to_remove:
-        edit_cmd.extend(["--remove-label", label])
-
-    if run_command(edit_cmd).returncode != 0:
-        print("Factcheck Agent: Failed to update PR labels.", file=sys.stderr)
-        sys.exit(1)
-    if run_command(["gh", "pr", "comment", str(pr_number), "--body", comment_body]).returncode != 0:
-        print("Factcheck Agent: Failed to post the verification comment.", file=sys.stderr)
-        sys.exit(1)
-
-    print(f"Factcheck Agent: Finished processing PR #{pr_number}")
+        label, gone, verb = "test:failed", "test:passed", "FAILED independent checks"
+        # No status label: editor_lifecycle re-routes (attempt+1) on the verdict label.
+        issue_add, issue_remove = ["agent:editor"], ["status:in-test", "agent:factcheck"]
+        target = "editor"
+    body = f"### Handoff  factcheck -> {target}\nPR #{pr_number} @ {sha} {verb}. {detail}"
+    if not ghlib.record(pr_number, issue, pr_add=[label], pr_remove=[gone],
+                        issue_add=issue_add, issue_remove=issue_remove, comment=body):
+        print("Factcheck Agent: failed to record the verdict on GitHub.", file=sys.stderr)
+        return 1
+    print(f"Factcheck Agent: PR #{pr_number} -> {label}")
+    return 0
 
 
 if __name__ == "__main__":
-    if len(sys.argv) != 2:
-        print("Usage: python factcheck_agent.py <PR_NUMBER>")
+    if len(sys.argv) != 2 or not sys.argv[1].isdigit():
+        print("Usage: python factcheck_agent.py <PR_NUMBER>", file=sys.stderr)
         sys.exit(1)
-    main(int(sys.argv[1]))
+    sys.exit(main(int(sys.argv[1])))

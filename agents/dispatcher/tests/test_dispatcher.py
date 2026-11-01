@@ -180,3 +180,108 @@ def test_tick_reroutes_and_clears_pr_verdict(tmp_path):
 @pytest.mark.parametrize("body,expected", [("Depends on: #1, #3", [1, 3]), ("none", [])])
 def test_dependency_parsing(body, expected):
     assert lc.dependencies(body) == expected
+
+
+# ---- issue -> PR resolution and deterministic copydesk/factcheck wiring ----------------------
+def pr_of(n, closes, labels=()):
+    return {"number": n, "labels": [{"name": x} for x in labels],
+            "closingIssuesReferences": [{"number": c} for c in closes]}
+
+
+def review_ticket():
+    return issue(14, ["status:in-review", "agent:copydesk", "attempt:1"])
+
+
+def test_deterministic_mode_command_uses_script_and_pr_number(tmp_path):
+    cfg = dispatch.Config({"NEWSROOM_REPO_DIR": str(tmp_path),
+                           "NEWSROOM_REVIEW_MODE": "deterministic"})
+    assert cfg.needs_pr("copydesk") and cfg.needs_pr("factcheck")
+    assert not cfg.needs_pr("reporter")
+    argv = cfg.command("copydesk", "14", "prompt", "21")
+    assert argv[1].endswith("copydesk_agent.py") and argv[-1] == "21"
+    assert cfg.command("factcheck", "14", "p", "21")[1].endswith("factcheck_agent.py")
+    assert cfg.command("reporter", "14", "p", "")[1] == "agent"  # still OpenClaw
+
+
+def test_default_mode_keeps_llm_agents(tmp_path):
+    cfg = dispatch.Config({"NEWSROOM_REPO_DIR": str(tmp_path)})
+    assert not cfg.needs_pr("copydesk") and not cfg.needs_pr("factcheck")
+    assert cfg.command("copydesk", "14", "p")[1:3] == ["-p", "copydesk"]
+    assert cfg.command("factcheck", "14", "p")[1:3] == ["agent", "--agent"]
+
+
+def test_explicit_command_override_wins_and_substitutes_pr(tmp_path):
+    cfg = dispatch.Config({"NEWSROOM_REPO_DIR": str(tmp_path),
+                           "NEWSROOM_REVIEW_MODE": "deterministic",
+                           "NEWSROOM_CMD_COPYDESK": "echo issue={issue} pr={pr}"})
+    assert cfg.needs_pr("copydesk")
+    assert cfg.command("copydesk", "14", "p", "21")[1:] == ["issue=14", "pr=21"]
+    cfg = dispatch.Config({"NEWSROOM_REPO_DIR": str(tmp_path),
+                           "NEWSROOM_CMD_COPYDESK": "echo {issue}"})
+    assert not cfg.needs_pr("copydesk")
+
+
+def test_resolve_pr_maps_issue_to_its_single_open_pr(tmp_path):
+    gh = FakeGH([review_ticket()], prs=[pr_of(20, [3]), pr_of(21, [14]), pr_of(22, [])])
+    d = make(tmp_path, gh, lambda *a, **k: (0, ""))
+    assert d.resolve_pr(14) == (21, "")
+    assert d.resolve_pr(99)[0] is None
+
+
+def test_deterministic_tick_passes_resolved_pr_not_issue_number(tmp_path):
+    gh = FakeGH([review_ticket()], prs=[pr_of(21, [14])])
+    seen = []
+
+    def runner(agent, issue_no, prompt, pr=None):
+        seen.append((agent, issue_no, pr))
+        gh.edit_labels("issue", 14, ["status:in-test", "agent:factcheck"],
+                       ["status:in-review", "agent:copydesk"])
+        return 0, "ok"
+
+    make(tmp_path, gh, runner, NEWSROOM_REVIEW_MODE="deterministic").tick()
+    assert seen == [("copydesk", "14", "21")]
+
+
+@pytest.mark.parametrize("prs, reason", [
+    ([], "no open PR"),
+    ([pr_of(21, [14]), pr_of(23, [14])], "ambiguous"),
+])
+def test_missing_or_ambiguous_pr_is_a_failed_attempt_and_agent_not_started(tmp_path, prs, reason):
+    gh = FakeGH([review_ticket()], prs=prs)
+    calls = []
+    d = make(tmp_path, gh, lambda *a, **k: calls.append(a) or (0, ""),
+             NEWSROOM_REVIEW_MODE="deterministic")
+    d.tick()
+    st = d.state.load("issue-14")
+    assert calls == [] and st["failures"] == 1 and reason in st["last_error"]
+
+
+def test_missing_pr_still_escalates_after_three_attempts(tmp_path):
+    gh = FakeGH([review_ticket()])
+    calls = []
+    d = make(tmp_path, gh, lambda *a, **k: calls.append(a) or (0, ""),
+             NEWSROOM_REVIEW_MODE="deterministic")
+    for _ in range(5):
+        d.tick()
+    assert calls == [] and labels_of(gh, 14) >= {"status:blocked", "agent:editor"}
+
+
+def test_default_mode_runner_gets_no_pr_argument(tmp_path):
+    gh = FakeGH([review_ticket()], prs=[pr_of(21, [14])])
+    got = []
+
+    def runner(*args, **kwargs):
+        got.append((args, kwargs))
+        return 1, "x"
+
+    make(tmp_path, gh, runner).tick()
+    assert got[0][1] == {} and got[0][0][:2] == ("copydesk", "14")
+
+
+def test_deterministic_script_failure_counts_and_retries(tmp_path):
+    gh = FakeGH([review_ticket()], prs=[pr_of(21, [14])])
+    d = make(tmp_path, gh, lambda *a, **k: (2, "ci check is pending"),
+             NEWSROOM_REVIEW_MODE="deterministic")
+    d.tick()
+    d.tick()
+    assert d.state.load("issue-14")["failures"] == 2
