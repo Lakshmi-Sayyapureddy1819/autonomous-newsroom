@@ -6,12 +6,16 @@ from typing import Annotated, Generator
 
 from fastapi import Depends, FastAPI, Request, Response
 from fastapi.responses import HTMLResponse
+from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
 from newsroom.db import get_connection
 
 # Initialize FastAPI app
 app = FastAPI()
+
+# Mount static files
+app.mount("/static", StaticFiles(directory="app/newsroom/static"), name="static")
 
 # Configure Jinja2 templates
 templates = Jinja2Templates(directory="app/newsroom/templates")
