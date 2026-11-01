@@ -8,6 +8,7 @@ from typing import Annotated, Generator
 
 from fastapi import Depends, FastAPI, Request, Response
 from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
@@ -24,6 +25,9 @@ async def lifespan(_app: FastAPI):
 
 # Initialize FastAPI app
 app = FastAPI(lifespan=lifespan)
+
+# Mount static files
+app.mount("/static", StaticFiles(directory="app/newsroom/static"), name="static")
 
 # Configure Jinja2 templates
 TEMPLATES_DIR = Path(__file__).resolve().parent / "templates"
