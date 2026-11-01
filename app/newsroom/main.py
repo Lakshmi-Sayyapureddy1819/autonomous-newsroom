@@ -8,6 +8,7 @@ from typing import Annotated, Generator
 
 from fastapi import Depends, FastAPI, Request, Response
 from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
@@ -28,6 +29,9 @@ app = FastAPI(lifespan=lifespan)
 # Configure Jinja2 templates
 TEMPLATES_DIR = Path(__file__).resolve().parent / "templates"
 templates = Jinja2Templates(directory=TEMPLATES_DIR)
+
+STATIC_DIR = Path(__file__).resolve().parent / "static"
+app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 
 ERROR_COPY = {
     404: ("Page not found", "We couldn't find that page. It may have moved, or the link is wrong."),
