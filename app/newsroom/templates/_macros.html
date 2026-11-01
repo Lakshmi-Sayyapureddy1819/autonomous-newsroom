@@ -1,0 +1,33 @@
+{# Reusable story building blocks shared by the home page sections. #}
+
+{% macro cover(a, size="md") -%}
+<a class="cover cover-{{ size }} pat-{{ a.hue % 3 }}" style="--h: {{ (a.tag_hue + (a.hue % 29) - 14) % 360 }}" href="{{ a.url }}" target="_blank" rel="noopener noreferrer" tabindex="-1" aria-hidden="true">
+    {% if size == "lg" %}<span class="cover-word" aria-hidden="true">{{ a.tag or "News" }}</span>{% endif %}
+    <span class="cover-emoji">{{ a.emoji }}</span>
+    <span class="cover-source">{{ a.source }}</span>
+</a>
+{%- endmacro %}
+
+{% macro byline(a) -%}
+<div class="byline" style="--hue: {{ a.hue }}">
+    <span class="avatar" aria-hidden="true">{{ a.initial }}</span>
+    <span class="source">{{ a.source }}</span>
+    <span class="sep">&middot;</span>
+    <time datetime="{{ a.published_at.isoformat() }}" title="{{ a.published_at.strftime('%Y-%m-%d %H:%M UTC') }}">{{ a.ago }}</time>
+</div>
+{%- endmacro %}
+
+{% macro tag_chip(a) -%}
+{% if a.tag %}<span class="tag tag-{{ a.tag | lower | replace(' ', '-') }}">{{ a.tag }}</span>{% endif %}
+{%- endmacro %}
+
+{% macro summary_box(a) -%}
+{% if a.summary and a.summary | trim != '' %}
+<div class="ai-summary">
+    <div class="ai-label">&#10024; AI summary</div>
+    <p>{{ a.summary }}</p>
+</div>
+{% else %}
+<div class="pending-box"><span class="pending">Summary pending</span>{{ a.description if a.description and a.description | trim != '' else "" }}</div>
+{% endif %}
+{%- endmacro %}

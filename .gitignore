@@ -27,9 +27,27 @@ ENV/
 
 # Environment & Terraform
 .env
+.env.*
+!.env.example
+!.env.*.example
 *.tfstate*
 *.tfvars
 !*.tfvars.example
+
+# Agent credentials and runtime state
+.openclaw/
+.hermes/
+**/.openclaw/
+**/.hermes/
+**/auth.json
+**/credentials.json
+**/*.pem
+**/*.key
+agents/traces/private/
+
+# Node and local tool state
+node_modules/
+.terraform/
 
 # OS / Editor
 desktop.ini

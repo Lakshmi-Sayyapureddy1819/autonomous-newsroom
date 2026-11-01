@@ -15,6 +15,7 @@ from typing import Optional
 import httpx
 
 from newsroom.db import get_connection
+from newsroom.env import load_env
 
 logger = logging.getLogger(__name__)
 
@@ -449,6 +450,7 @@ def summarize(
 
 def main() -> None:
     """CLI entrypoint for summarizer."""
+    load_env()
     logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
     print("Starting newsroom summarizer run...")
     result = summarize()

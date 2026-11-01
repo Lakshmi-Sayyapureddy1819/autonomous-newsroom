@@ -2,6 +2,8 @@
 
 A self-updating autonomous newsroom delivered by a multi-agent team running on OpenClaw and Hermes Agent.
 
+Project references: [product brief](docs/brief.md), [implementation plan](docs/PLAN.md), [agent protocol](agents/PROTOCOL.md), and [delivery status](DELIVERY.md).
+
 ## Agent Team Roster
 
 The delivery team consists of four specialized roles operating across two runtimes. All agent coordination and handoffs flow exclusively through GitHub Issues, Pull Requests, and label transitions.

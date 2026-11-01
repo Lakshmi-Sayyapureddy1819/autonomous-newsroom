@@ -1,0 +1,11 @@
+[Unit]
+Description=Poll the newsroom GitHub queue every five minutes
+
+[Timer]
+OnBootSec=2min
+OnUnitActiveSec=5min
+Unit=dispatcher.service
+Persistent=true
+
+[Install]
+WantedBy=timers.target

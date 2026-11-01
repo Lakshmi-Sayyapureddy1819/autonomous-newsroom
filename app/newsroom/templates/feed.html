@@ -1,0 +1,53 @@
+{% extends "base.html" %}
+{% block title %}RSS feed &mdash; Autonomous Newsroom{% endblock %}
+{% block content %}
+        {% import "_macros.html" as m %}
+        <section class="page-title">
+            <h1>The <span class="grad">RSS feed</span></h1>
+            <p>Follow the newsroom in your favorite feed reader. Every story below comes with its AI summary and topic tag.{% if tag %} Showing only <b>{{ tag }}</b> stories.{% endif %}</p>
+            <div class="subscribe">
+                <label for="feed-url">Feed address</label>
+                <div class="subscribe-row">
+                    <input id="feed-url" type="text" readonly value="{{ feed_url }}">
+                    <button type="button" id="copy-feed" class="btn-primary" style="padding:10px 20px">Copy</button>
+                </div>
+                <a class="raw-link" href="{{ feed_url }}?format=xml">View the raw XML &rarr;</a>
+            </div>
+        </section>
+
+        {% if articles %}
+        <div class="grid" style="margin-top:28px">
+            {% for article in articles %}
+            <article class="card">
+                {{ m.cover(article, "md") }}
+                <div class="card-body">
+                    {{ m.byline(article) }}
+                    <h3><a href="{{ article.url }}" target="_blank" rel="noopener noreferrer">{{ article.display_title }}</a></h3>
+                    {{ m.summary_box(article) }}
+                </div>
+                <div class="card-foot">
+                    {% if article.tag %}{{ m.tag_chip(article) }}{% else %}<span></span>{% endif %}
+                    <a class="read-more" href="{{ article.url }}" target="_blank" rel="noopener noreferrer">Read &rarr;</a>
+                </div>
+            </article>
+            {% endfor %}
+        </div>
+        {% else %}
+        <div class="empty" style="margin-top:28px"><div class="icon" aria-hidden="true">&#128240;</div><h2>The feed is empty</h2><p>Stories will appear here once they have been collected.</p></div>
+        {% endif %}
+        <p class="result-note" style="margin:26px 0 56px">{% if last_updated_message %}Last updated {{ last_updated_message }}. {% endif %}<a href="/">Back to the newsroom</a></p>
+{% endblock %}
+
+{% block scripts %}
+<script>
+    (function () {
+        var btn = document.getElementById('copy-feed'), input = document.getElementById('feed-url');
+        btn.addEventListener('click', function () {
+            input.select();
+            var done = function () { btn.textContent = 'Copied!'; setTimeout(function () { btn.textContent = 'Copy'; }, 1800); };
+            if (navigator.clipboard) { navigator.clipboard.writeText(input.value).then(done); }
+            else { document.execCommand('copy'); done(); }
+        });
+    })();
+</script>
+{% endblock %}

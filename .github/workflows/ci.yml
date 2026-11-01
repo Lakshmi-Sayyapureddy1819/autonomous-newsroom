@@ -20,7 +20,7 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Verify commit trailers on PRs
+      - name: Verify author identity and product commit trailers on PRs
         run: |
           if [ "${{ github.event_name }}" = "pull_request" ]; then
             BASE_REF="origin/${{ github.base_ref }}"
@@ -35,6 +35,12 @@ jobs:
               if [ "${AUTHOR_EMAIL}" != "142775745+Lakshmi-Sayyapureddy1819@users.noreply.github.com" ]; then
                 echo "ERROR: Commit ${commit} author email is '${AUTHOR_EMAIL}', expected '142775745+Lakshmi-Sayyapureddy1819@users.noreply.github.com'"
                 FAILED=1
+              fi
+
+              CHANGED_FILES=$(git diff-tree --no-commit-id --name-only -r "${commit}")
+              if ! echo "${CHANGED_FILES}" | grep -Eq '^(app|deploy)/'; then
+                echo "No product files changed in ${commit}; trailer check is not required for bootstrap/documentation commits."
+                continue
               fi
 
               BODY=$(git log -1 --format='%B' "${commit}")

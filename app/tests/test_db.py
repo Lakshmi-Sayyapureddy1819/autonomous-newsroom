@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import sqlite3
 from pathlib import Path
+from threading import Thread
 
 import pytest
 
@@ -97,7 +98,28 @@ def test_articles_crud_and_constraints(tmp_path: Path) -> None:
         conn.close()
 
 
+
+
+def test_get_connection_threading(tmp_path: Path) -> None:
+    db_file = tmp_path / "threaded_test.db"
+    init_db(db_file)
+
+    # Create connection in main thread with check_same_thread=False
+    conn = get_connection(db_file, check_same_thread=False)
+    try:
+        def use_connection_in_thread():
+            # This should not raise ProgrammingError
+            conn.execute("SELECT 1").fetchone()
+
+        thread = Thread(target=use_connection_in_thread)
+        thread.start()
+        thread.join()
+
+    finally:
+        conn.close()
+
 def test_runs_crud(tmp_path: Path) -> None:
+
     db_file = tmp_path / "runs.db"
     init_db(db_file)
 

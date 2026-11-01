@@ -6,6 +6,7 @@ import datetime
 import html
 import logging
 import os
+import re
 import sqlite3
 import sys
 from dataclasses import dataclass
@@ -16,6 +17,7 @@ import feedparser
 import httpx
 
 from newsroom.db import get_connection
+from newsroom.env import load_env
 
 DEFAULT_FEED_URL = (
     "https://news.google.com/rss/search?q=artificial+intelligence&hl=en-US&gl=US&ceid=US:en"
@@ -30,6 +32,7 @@ class ArticleItem:
     title: str
     source: str
     published_at: str
+    description: Optional[str] = None
 
 
 @dataclass
@@ -74,6 +77,21 @@ def normalize_iso_datetime(entry: dict) -> Optional[str]:
     return None
 
 
+def strip_description_html(raw: Optional[str], title: str) -> Optional[str]:
+    """Return plain-text description, or None if empty or merely repeating the title.
+
+    Google News descriptions are HTML (an anchor with the headline plus a source tag).
+    """
+    if not raw:
+        return None
+    text = re.sub(r"<[^>]+>", " ", html.unescape(raw))
+    text = " ".join(html.unescape(text).split())
+    title_core = title.rsplit(" - ", 1)[0].strip().lower()
+    if not text or (title_core and text.lower().startswith(title_core)):
+        return None
+    return text
+
+
 def extract_source(entry: dict) -> str:
     """Extract source or publisher name from entry."""
     source_obj = entry.get("source")
@@ -113,11 +131,16 @@ def parse_entry(entry: dict) -> Optional[ArticleItem]:
     if not published_at:
         return None
 
+    # Extract description from summary or content
+    description = (entry.get("summary") or entry.get("content", [{}])[0].get("value") or "").strip()
+    clean_description = strip_description_html(description, clean_title)
+
     return ArticleItem(
         url=url,
         title=clean_title,
         source=source,
         published_at=published_at,
+        description=clean_description,
     )
 
 
@@ -178,18 +201,45 @@ def fetch_and_parse_feed(
     return articles, raw_count, error_msg
 
 
+def title_key(title: str, source: str = "") -> str:
+    """Normalized headline used to spot the same story published under different URLs."""
+    suffix = f" - {source}"
+    if source and title.endswith(suffix):
+        title = title[: -len(suffix)]
+    return re.sub(r"[^a-z0-9]+", "", title.lower())
+
+
 def persist_articles(conn: sqlite3.Connection, articles: list[ArticleItem]) -> int:
-    """Insert articles into database with URL deduplication, returning count inserted."""
+    """Insert new articles, skipping duplicate URLs and near-duplicate headlines.
+
+    Returns the number of rows inserted.
+    """
     inserted = 0
+    seen = {
+        title_key(row[0], row[1])
+        for row in conn.execute(
+            "SELECT title, source FROM articles ORDER BY published_at DESC LIMIT 2000"
+        )
+    }
     with conn:
         for article in articles:
+            key = title_key(article.title, article.source)
+            if key and key in seen:
+                continue
+            seen.add(key)
             cursor = conn.execute(
                 """
-                INSERT INTO articles (url, title, source, published_at)
-                VALUES (?, ?, ?, ?)
+                INSERT INTO articles (url, title, source, published_at, description)
+                VALUES (?, ?, ?, ?, ?)
                 ON CONFLICT(url) DO NOTHING;
                 """,
-                (article.url, article.title, article.source, article.published_at),
+                (
+                    article.url,
+                    article.title,
+                    article.source,
+                    article.published_at,
+                    article.description,
+                ),
             )
             inserted += cursor.rowcount
     return inserted
@@ -296,6 +346,7 @@ def collect(
 
 def main() -> None:
     """CLI entrypoint for collector."""
+    load_env()
     logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
     feed_url = get_feed_url()
     print(f"Starting collector run for: {feed_url}")
@@ -304,6 +355,14 @@ def main() -> None:
         f"Collector completed with status='{result.status}': "
         f"fetched={result.fetched}, inserted={result.inserted}, error={result.error}"
     )
+    from newsroom.hackernews import collect_hacker_news, hn_enabled
+
+    if hn_enabled():
+        hn = collect_hacker_news()
+        print(
+            f"Hacker News completed with status='{hn.status}': "
+            f"fetched={hn.fetched}, inserted={hn.inserted}, error={hn.error}"
+        )
     if result.status == "failed":
         sys.exit(1)
 
