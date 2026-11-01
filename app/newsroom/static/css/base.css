@@ -1,0 +1,66 @@
+/* app/newsroom/static/css/base.css */
+
+:root {
+    --color-background: #f4f4f4;
+    --color-text: #333;
+    --color-primary: #0056b3;
+    --color-border: #eee;
+    --color-card-background: white;
+    --color-meta-text: #666;
+    --color-footer-text: #999;
+}
+
+body {
+    font-family: Arial, sans-serif;
+    margin: 20px;
+    background-color: var(--color-background);
+    color: var(--color-text);
+}
+.container {
+    max-width: 800px;
+    margin: auto;
+    background: var(--color-card-background);
+    padding: 20px;
+    border-radius: 8px;
+    box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+}
+h1 {
+    color: var(--color-primary);
+}
+.article-card {
+    border-bottom: 1px solid var(--color-border);
+    padding: 15px 0;
+}
+.article-card:last-child {
+    border-bottom: none;
+}
+.article-title a {
+    color: var(--color-primary);
+    text-decoration: none;
+    font-size: 1.2em;
+}
+.article-title a:hover {
+    text-decoration: underline;
+}
+.article-meta {
+    font-size: 0.9em;
+    color: var(--color-meta-text);
+    margin-top: 5px;
+}
+.article-summary {
+    margin-top: 10px;
+    line-height: 1.6;
+}
+.empty-state {
+    text-align: center;
+    padding: 50px;
+    color: var(--color-meta-text);
+}
+.footer {
+    margin-top: 30px;
+    font-size: 0.8em;
+    color: var(--color-footer-text);
+    text-align: center;
+    border-top: 1px solid var(--color-border);
+    padding-top: 10px;
+}
