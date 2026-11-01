@@ -12,6 +12,9 @@ from fastapi.templating import Jinja2Templates
 from newsroom.db import get_connection
 
 # Initialize FastAPI app
+SITE_NAME = "Autonomous Newsroom"
+SITE_TAGLINE = "Your AI-powered news aggregator"
+
 app = FastAPI()
 
 # Mount static files
@@ -19,6 +22,8 @@ app.mount("/static", StaticFiles(directory="app/newsroom/static"), name="static"
 
 # Configure Jinja2 templates
 templates = Jinja2Templates(directory="app/newsroom/templates")
+templates.globals["SITE_NAME"] = SITE_NAME
+templates.globals["SITE_TAGLINE"] = SITE_TAGLINE
 
 # Constants
 DEFAULT_LIMIT = 20

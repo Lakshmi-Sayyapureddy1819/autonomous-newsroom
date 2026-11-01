@@ -2,9 +2,9 @@
 <rss version="2.0">
 
 <channel>
-  <title>Autonomous Newsroom</title>
+  <title>{{ SITE_NAME }}</title>
   <link>{{ base_url }}</link>
-  <description>Latest news from the Autonomous Newsroom.</description>
+  <description>{{ SITE_TAGLINE }}</description>
   {% if last_build_date %}
   <lastBuildDate>{{ last_build_date }}</lastBuildDate>
   {% else %}

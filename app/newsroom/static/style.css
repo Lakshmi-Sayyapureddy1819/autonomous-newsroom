@@ -38,15 +38,63 @@
     --shadow-sm: 0 2px 4px rgba(0, 0, 0, 0.1);
 }
 
+.masthead {
+    background-color: var(--surface-color);
+    border-bottom: 1px solid var(--border-color);
+    padding: var(--spacing-sm) var(--spacing-lg);
+}
+.masthead .container {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    max-width: 800px;
+    margin: 0 auto;
+}
+.masthead .brand {
+    font-size: var(--font-size-h1);
+    font-weight: bold;
+    color: var(--primary-color);
+    text-decoration: none;
+}
+.masthead .tagline {
+    font-size: var(--font-size-small);
+    color: var(--text-color-secondary);
+    margin-left: var(--spacing-sm);
+}
+.masthead nav {
+    display: flex;
+    align-items: center;
+}
+.masthead .rss-link {
+    margin-right: var(--spacing-md);
+    color: var(--text-color-secondary);
+    text-decoration: none;
+}
+.masthead .rss-link:hover {
+    text-decoration: underline;
+}
+#theme-toggle {
+    background-color: var(--primary-color);
+    color: white;
+    border: none;
+    padding: var(--spacing-xs) var(--spacing-sm);
+    border-radius: var(--border-radius-md);
+    cursor: pointer;
+    font-size: var(--font-size-small);
+}
+#theme-toggle:hover {
+    opacity: 0.9;
+}
+
 body {
     font-family: var(--font-family-body);
-    margin: var(--spacing-lg);
+    margin: 0;
     background-color: var(--background-color);
     color: var(--text-color);
 }
 .container {
     max-width: 800px;
-    margin: auto;
+    margin: var(--spacing-lg) auto;
     background: var(--surface-color);
     padding: var(--spacing-lg);
     border-radius: var(--border-radius-md);
@@ -92,16 +140,22 @@ h1 {
     border-top: 1px solid var(--border-color);
     padding-top: var(--spacing-sm);
 }
+.footer .rss-link {
+    color: var(--text-color-tertiary);
+    text-decoration: none;
+    margin-left: var(--spacing-sm);
+}
+.footer .rss-link:hover {
+    text-decoration: underline;
+}
 
-@media (prefers-color-scheme: dark) {
-    :root {
-        /* Dark Theme Semantic Colors */
-        --background-color: #1a1a1a;
-        --surface-color: #2b2b2b;
-        --text-color: #e0e0e0;
-        --text-color-secondary: #b0b0b0;
-        --text-color-tertiary: #777;
-        --primary-color: #64b5f6; /* A lighter blue for contrast */
-        --border-color: #444;
-    }
+:root[data-theme="dark"] {
+    /* Dark Theme Semantic Colors */
+    --background-color: #1a1a1a;
+    --surface-color: #2b2b2b;
+    --text-color: #e0e0e0;
+    --text-color-secondary: #b0b0b0;
+    --text-color-tertiary: #777;
+    --primary-color: #64b5f6; /* A lighter blue for contrast */
+    --border-color: #444;
 }

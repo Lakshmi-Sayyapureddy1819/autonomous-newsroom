@@ -3,18 +3,53 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>{% block title %}Autonomous Newsroom{% endblock %}</title>
+    <title>{% block title %}{{ SITE_NAME }} - {{ SITE_TAGLINE }}{% endblock %}</title>
+    <script>
+        // Inline script to apply theme before first paint
+        (function() {
+            const savedTheme = localStorage.getItem('theme');
+            if (savedTheme) {
+                document.documentElement.setAttribute('data-theme', savedTheme);
+            } else if (window.matchMedia('(prefers-color-scheme: dark)').matches) {
+                document.documentElement.setAttribute('data-theme', 'dark');
+            } else {
+                document.documentElement.setAttribute('data-theme', 'light');
+            }
+        })();
+    </script>
     <link rel="stylesheet" href="{{ url_for('static', path='style.css') }}">
 </head>
 <body>
+    <div class="masthead">
+        <div class="container">
+            <a href="/" class="brand">{{ SITE_NAME }}</a>
+            <span class="tagline">{{ SITE_TAGLINE }}</span>
+            <nav>
+                <a href="/rss.xml" class="rss-link" target="_blank">RSS</a>
+                <button id="theme-toggle" aria-label="Toggle theme">
+                    Toggle Theme
+                </button>
+            </nav>
+        </div>
+    </div>
     <div class="container">
         {% block content %}{% endblock %}
     </div>
     <div class="footer">
-        <p>&copy; {{ current_year }} Autonomous Newsroom. All rights reserved.</p>
-        {% if last_updated_message %}
-            <p>Last updated: {{ last_updated_message }}</p>
-        {% endif %}
+        <div class="container">
+            <p>&copy; {{ current_year }} {{ SITE_NAME }}. All rights reserved. <a href="/rss.xml" class="rss-link">RSS Feed</a></p>
+            {% if last_updated_message %}
+                <p>Updated {{ last_updated_message }}</p>
+            {% endif %}
+        </div>
     </div>
+    <script>
+        document.getElementById('theme-toggle').addEventListener('click', () => {
+            const currentTheme = document.documentElement.getAttribute('data-theme');
+            const newTheme = currentTheme === 'dark' ? 'light' : 'dark';
+            document.documentElement.setAttribute('data-theme', newTheme);
+            localStorage.setItem('theme', newTheme);
+        });
+    </script>
 </body>
 </html>
