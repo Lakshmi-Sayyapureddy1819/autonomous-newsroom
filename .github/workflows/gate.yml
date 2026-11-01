@@ -2,7 +2,8 @@ name: gate
 
 on:
   pull_request:
-    types: [opened, synchronize, reopened, labeled, unlabeled]
+    # `edited` re-evaluates when the PR body changes (adds/removes "Closes #N").
+    types: [opened, synchronize, reopened, labeled, unlabeled, edited]
 
 jobs:
   gate:
@@ -11,26 +12,28 @@ jobs:
       contents: read
       pull-requests: read
     steps:
-      - name: Verify review and test verdict labels via jq
+      - name: Checkout gate scripts
+        uses: actions/checkout@v4
+        with:
+          sparse-checkout: .github/scripts
+
+      - name: Verify verdict labels (newsroom PRs only)
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          REPO: ${{ github.repository }}
         run: |
-          echo "Evaluating gate criteria using event payload at ${GITHUB_EVENT_PATH}..."
+          OWNER="${REPO%/*}"; NAME="${REPO#*/}"
 
-          HAS_REVIEW=$(jq -r '[.pull_request.labels[]?.name] | index("review:approved") != null' "${GITHUB_EVENT_PATH}")
-          HAS_TEST=$(jq -r '[.pull_request.labels[]?.name] | index("test:passed") != null' "${GITHUB_EVENT_PATH}")
+          # Authoritative live lookup (the event payload has neither fresh labels
+          # after re-runs nor closing references).
+          LINKED=$(gh api graphql -F owner="$OWNER" -F name="$NAME" -F number="$PR_NUMBER" \
+            -f query='query($owner:String!,$name:String!,$number:Int!){repository(owner:$owner,name:$name){pullRequest(number:$number){closingIssuesReferences(first:10){totalCount}}}}' \
+            --jq '.data.repository.pullRequest.closingIssuesReferences.totalCount') || LINKED=""
 
-          echo "review:approved present: ${HAS_REVIEW}"
-          echo "test:passed present: ${HAS_TEST}"
+          LABELS=$(gh api "repos/${REPO}/issues/${PR_NUMBER}/labels" --jq '[.[].name]') || LABELS="[]"
+          HAS_REVIEW=$(echo "$LABELS" | jq -r 'index("review:approved") != null')
+          HAS_TEST=$(echo "$LABELS" | jq -r 'index("test:passed") != null')
 
-          if [ "${HAS_REVIEW}" = "true" ] && [ "${HAS_TEST}" = "true" ]; then
-            echo "GATE PASSED: Both review:approved and test:passed labels are present on PR."
-            exit 0
-          else
-            echo "GATE BLOCKED: Missing required verdict labels."
-            if [ "${HAS_REVIEW}" != "true" ]; then
-              echo "  - Missing: review:approved (must be set by Copydesk)"
-            fi
-            if [ "${HAS_TEST}" != "true" ]; then
-              echo "  - Missing: test:passed (must be set by Factcheck)"
-            fi
-            exit 1
-          fi
+          echo "linked issues: ${LINKED:-unknown} | review:approved: ${HAS_REVIEW} | test:passed: ${HAS_TEST}"
+          bash .github/scripts/gate_decide.sh "${LINKED}" "${HAS_REVIEW}" "${HAS_TEST}"
