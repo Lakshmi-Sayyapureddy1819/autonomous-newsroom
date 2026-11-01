@@ -16,6 +16,8 @@
 | `status:in-test`, `agent:factcheck` | factcheck | `openclaw agent --agent factcheck --message ...` |
 | no tickets exist and `docs/brief.md` exists | editor | `hermes -p editor chat -q ... --oneshot` (writes the tickets) |
 
+**Deterministic review/test mode (no LLM, for rate-limited models):** set `NEWSROOM_REVIEW_MODE=deterministic`. Copydesk and Factcheck then run `agents/scripts/copydesk_agent.py` / `factcheck_agent.py` with the **PR number**, which the dispatcher resolves from the single open PR whose `Closes #N` matches the ticket (none or several = a failed attempt, agent not started; same retry/escalation). Copydesk approves only if the PR closes one Issue, is not a draft, has no conflicts and `ci` is green (pending `ci` = no verdict, retried). Factcheck needs `review:approved` + green `ci`, runs ruff and pytest on the exact head SHA in a throwaway worktree, and writes `test:passed` / `test:failed` only from that result (nothing if it cannot run or the head moved). Verdict labels go on the PR; `status:*` / `agent:*` hand-off labels go on the Issue. The default (unset) still uses the Hermes/OpenClaw agents. `NEWSROOM_CMD_<AGENT>` may use `{pr}` as well as `{issue}`.
+
 `status:in-progress` is woken only when untouched for `NEWSROOM_STALE_MINUTES` (default 45). `status:ready-to-merge`, `status:blocked` and malformed label sets are never dispatched.
 
 - **No concurrent duplicates:** a per-agent lock file in the state dir; agents run in parallel with each other, never twice at once. A lock older than the agent timeout is treated as stale.
