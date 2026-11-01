@@ -6,12 +6,16 @@ from typing import Annotated, Generator
 
 from fastapi import Depends, FastAPI, Request, Response
 from fastapi.responses import HTMLResponse
+from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
 from newsroom.db import get_connection
 
 # Initialize FastAPI app
 app = FastAPI()
+
+# Mount static files
+app.mount("/static", StaticFiles(directory="app/newsroom/static"), name="static")
 
 # Configure Jinja2 templates
 templates = Jinja2Templates(directory="app/newsroom/templates")
@@ -109,9 +113,11 @@ async def rss_feed(request: Request, conn: Annotated[sqlite3.Connection, Depends
 
         # Basic RSS 2.0 structure
         # Need to implement proper templating for RSS
+        base_url = str(request.base_url)
         context_data = {
             "articles": articles_hashable,
             "last_build_date": last_build_date,
+            "base_url": base_url,
         }
         content = templates.TemplateResponse(
             request,

@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0">
+
+<channel>
+  <title>Autonomous Newsroom</title>
+  <link>http://localhost:8000/</link>
+  <description>Latest news from the Autonomous Newsroom.</description>
+  {% if last_build_date %}
+  <lastBuildDate>{{ last_build_date }}</lastBuildDate>
+  {% endif %}
+  {% for article in articles %}
+  <item>
+    <title>{{ article.title }}</title>
+    <link>{{ article.url }}</link>
+    <description>{{ article.summary }}</description>
+    <pubDate>{{ article.published_at.strftime('%a, %d %b %Y %H:%M:%S GMT') }}</pubDate>
+    <guid>{{ article.url }}</guid>
+  </item>
+  {% endfor %}
+</channel>
+
+</rss>

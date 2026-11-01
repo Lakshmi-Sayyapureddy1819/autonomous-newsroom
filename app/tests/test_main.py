@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import sqlite3
+import xml.etree.ElementTree as ET
 from pathlib import Path
 
 import pytest
@@ -118,4 +119,21 @@ def test_rss_feed_generates_valid_xml(seeded_db: str, override_db_dependency) ->
 
 
 def test_rss_feed_empty_state(test_db: str, override_db_dependency) -> None:
-    client.get("/rss.xml")
+    response = client.get("/rss.xml")
+    assert response.status_code == 200
+
+
+def test_rss_feed_channel_link_and_content_type(seeded_db: str, override_db_dependency) -> None:
+    response = client.get("/rss.xml")
+    assert response.status_code == 200
+    assert response.headers["content-type"] == "application/rss+xml"
+
+    # Parse the XML response
+    root = ET.fromstring(response.text)
+    channel = root.find("channel")
+    assert channel is not None
+
+    # Assert the channel link
+    link_element = channel.find("link")
+    assert link_element is not None
+    assert link_element.text == "http://testserver/"

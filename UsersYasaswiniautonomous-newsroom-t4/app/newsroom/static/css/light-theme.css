@@ -1,0 +1,63 @@
+
+/* Light Theme */
+body {
+    background-color: var(--color-background-light);
+    color: var(--color-text-dark);
+    font-family: var(--font-family-body);
+    font-size: var(--font-size-base);
+    line-height: var(--line-height-base);
+}
+
+h1,
+h2,
+h3 {
+    font-family: var(--font-family-heading);
+    color: var(--color-primary);
+}
+
+h1 {
+    font-size: var(--font-size-h1);
+}
+
+h2 {
+    font-size: var(--font-size-h2);
+}
+
+h3 {
+    font-size: var(--font-size-h3);
+}
+
+a {
+    color: var(--color-primary);
+    text-decoration: none;
+}
+
+a:hover {
+    text-decoration: underline;
+}
+
+.container {
+    max-width: 960px;
+    margin: 0 auto;
+    padding: var(--spacing-md);
+}
+
+.header {
+    background-color: var(--color-primary);
+    color: var(--color-text-light);
+    padding: var(--spacing-md);
+    text-align: center;
+}
+
+.header h1 {
+    color: var(--color-text-light);
+    margin-top: 0;
+}
+
+.footer {
+    background-color: var(--color-background-dark);
+    color: var(--color-text-light);
+    padding: var(--spacing-md);
+    text-align: center;
+    margin-top: var(--spacing-lg);
+}
