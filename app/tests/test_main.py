@@ -1,13 +1,11 @@
 from __future__ import annotations
 
 import datetime
-import sqlite3
 import xml.etree.ElementTree as ET
 from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
-from unittest.mock import Mock, patch
 
 from newsroom.db import get_connection, init_db
 from newsroom.main import app
@@ -93,7 +91,7 @@ def test_homepage_orders_newest_first(client: TestClient, db_path: Path) -> None
 
 
 def test_rss_feed_empty(client: TestClient) -> None:
-    response = client.get("/rss.xml?format=xml")
+    response = client.get("/rss.xml")
     assert response.status_code == 200
     assert response.headers["content-type"] == "application/xml; charset=utf-8"
     assert ET.fromstring(response.text).findall("./channel/item") == []
@@ -109,7 +107,7 @@ def test_rss_feed_contains_real_articles(client: TestClient, db_path: Path) -> N
         ],
         run_finished_at=recent(1),
     )
-    response = client.get("/rss.xml?format=xml")
+    response = client.get("/rss.xml")
     assert response.status_code == 200
     items = ET.fromstring(response.text).findall("./channel/item")
     assert len(items) == 2
@@ -166,7 +164,7 @@ def test_rss_feed_is_a_styled_page_for_browsers_and_xml_for_feed_readers(
     assert "View the raw XML" in browser.text and "rss.xml?format=xml" in browser.text
 
     for accept in ("application/rss+xml, application/xml;q=0.9, */*;q=0.8", "*/*"):
-        reader = client.get("/rss.xml?format=xml", headers={"accept": accept})
+        reader = client.get("/rss.xml", headers={"accept": accept})
         assert reader.headers["content-type"] == "application/xml; charset=utf-8"
         assert ET.fromstring(reader.text).findall("./channel/item")[0].findtext("title") == (
             "Feed Story"
@@ -248,7 +246,7 @@ def test_rss_feed_can_filter_by_tag(client: TestClient, db_path: Path) -> None:
         ("https://a.example/1", "Policy Story", "2026-10-30T10:00:00+00:00", "s", None, "Policy"),
         ("https://a.example/2", "Tools Story", "2026-10-30T09:00:00+00:00", "s", None, "Tools"),
     ])
-    items = ET.fromstring(client.get("/rss.xml?format=xml&tag=policy").text).findall("./channel/item")
+    items = ET.fromstring(client.get("/rss.xml?tag=policy").text).findall("./channel/item")
     assert [i.findtext("title") for i in items] == ["Policy Story"]
 
 
@@ -327,7 +325,7 @@ def test_all_html_pages_share_the_same_layout(client: TestClient) -> None:
 
 
 def test_rss_feed_channel_link_uses_request_base_url(client: TestClient) -> None:
-    response = client.get("/rss.xml?format=xml")
+    response = client.get("/rss.xml")
     assert response.status_code == 200
     assert response.headers["content-type"] == "application/xml; charset=utf-8"
     channel = ET.fromstring(response.text).find("channel")
