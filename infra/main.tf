@@ -67,13 +67,13 @@ resource "oci_core_security_list" "public" {
 }
 
 resource "oci_core_subnet" "public" {
-  compartment_id    = var.compartment_id
-  vcn_id            = oci_core_vcn.newsroom.id
-  cidr_block        = "10.42.1.0/24"
-  display_name      = "newsroom-public-subnet"
-  dns_label         = "public"
-  route_table_id    = oci_core_route_table.public.id
-  security_list_ids = [oci_core_security_list.public.id]
+  compartment_id             = var.compartment_id
+  vcn_id                     = oci_core_vcn.newsroom.id
+  cidr_block                 = "10.42.1.0/24"
+  display_name               = "newsroom-public-subnet"
+  dns_label                  = "public"
+  route_table_id             = oci_core_route_table.public.id
+  security_list_ids          = [oci_core_security_list.public.id]
   prohibit_public_ip_on_vnic = false
 }
 

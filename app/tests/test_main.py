@@ -322,3 +322,12 @@ def test_all_html_pages_share_the_same_layout(client: TestClient) -> None:
         assert 'class="masthead"' in text, path
         assert "Subscribe via RSS" in text, path  # footer link
         assert "data-theme" in text, path
+
+
+def test_rss_feed_channel_link_uses_request_base_url(client: TestClient) -> None:
+    response = client.get("/rss.xml")
+    assert response.status_code == 200
+    assert response.headers["content-type"] == "application/xml; charset=utf-8"
+    channel = ET.fromstring(response.text).find("channel")
+    assert channel is not None
+    assert channel.findtext("link") == "http://testserver/"

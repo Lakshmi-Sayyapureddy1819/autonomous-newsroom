@@ -282,7 +282,13 @@ def rss_feed(
             "%a, %d %b %Y %H:%M:%S %z"
         )
     content = templates.TemplateResponse(
-        request, "rss.xml", {"articles": articles, "last_build_date": last_build_date}
+        request,
+        "rss.xml",
+        {
+            "articles": articles,
+            "last_build_date": last_build_date,
+            "base_url": str(request.base_url),
+        },
     )
     return Response(content=content.body, media_type="application/xml; charset=utf-8")
 
