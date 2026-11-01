@@ -109,9 +109,11 @@ async def rss_feed(request: Request, conn: Annotated[sqlite3.Connection, Depends
 
         # Basic RSS 2.0 structure
         # Need to implement proper templating for RSS
+        base_url = str(request.base_url)
         context_data = {
             "articles": articles_hashable,
             "last_build_date": last_build_date,
+            "base_url": base_url,
         }
         content = templates.TemplateResponse(
             request,
