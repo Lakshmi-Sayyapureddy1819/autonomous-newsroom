@@ -1,0 +1,35 @@
+Factcheck Agent: Validating PR #25
+{"closingIssuesReferences":[{"id":"I_kwDOVbsoSs8AAAABbioy9g","number":14,"repository":{"id":"R_kgDOVbsoSg","name":"autonomous-newsroom","owner":{"id":"U_kgDOCIKVwQ","login":"Lakshmi-Sayyapureddy1819"}},"url":"https://github.com/Lakshmi-Sayyapureddy1819/autonomous-newsroom/issues/14"}],"headRefName":"t14-design-tokens-themes-contrast-shared-layout","headRefOid":"3f57733f0ff040d42360a88da4955e6301cde9f5","isDraft":false,"labels":[{"id":"LA_kwDOVbsoSs8AAAADAFzO7w","name":"status:in-review","description":"PR open, waiting for review","color":"1D76DB"},{"id":"LA_kwDOVbsoSs8AAAADAFzUrw","name":"agent:copydesk","description":"Copydesk turn","color":"BFD4F2"},{"id":"LA_kwDOVbsoSs8AAAADAFzV4A","name":"review:approved","description":"Review passed","color":"0E8A16"}],"mergeable":"MERGEABLE","number":25,"statusCheckRollup":[{"__typename":"CheckRun","completedAt":"2026-11-01T14:54:14Z","conclusion":"FAILURE","detailsUrl":"https://github.com/Lakshmi-Sayyapureddy1819/autonomous-newsroom/actions/runs/41318463115/job/124883431319","name":"gate","startedAt":"2026-11-01T14:54:08Z","status":"COMPLETED","workflowName":"gate"},{"__typename":"CheckRun","completedAt":"2026-11-01T14:54:21Z","conclusion":"FAILURE","detailsUrl":"https://github.com/Lakshmi-Sayyapureddy1819/autonomous-newsroom/actions/runs/41318472195/job/124883456617","name":"gate","startedAt":"2026-11-01T14:54:15Z","status":"COMPLETED","workflowName":"gate"},{"__typename":"CheckRun","completedAt":"2026-11-01T14:54:20Z","conclusion":"FAILURE","detailsUrl":"https://github.com/Lakshmi-Sayyapureddy1819/autonomous-newsroom/actions/runs/41318472276/job/124883456891","name":"gate","startedAt":"2026-11-01T14:54:14Z","status":"COMPLETED","workflowName":"gate"},{"__typename":"CheckRun","completedAt":"2026-11-01T15:00:15Z","conclusion":"FAILURE","detailsUrl":"https://github.com/Lakshmi-Sayyapureddy1819/autonomous-newsroom/actions/runs/41318952657/job/124884888379","name":"gate","startedAt":"2026-11-01T15:00:10Z","status":"COMPLETED","workflowName":"gate"},{"__typename":"CheckRun","completedAt":"2026-11-01T14:54:32Z","conclusion":"SUCCESS","detailsUrl":"https://github.com/Lakshmi-Sayyapureddy1819/autonomous-newsroom/actions/runs/41318463083/job/124883431250","name":"ci","startedAt":"2026-11-01T14:54:08Z","status":"COMPLETED","workflowName":"ci"}],"title":"feat(styling): Extract CSS to external stylesheet"}
+C:/Users/Yasaswini/autonomous-newsroom
+Factcheck Agent: Fetching PR #25 head 3f57733f0ff040d42360a88da4955e6301cde9f5
+3f57733f0ff040d42360a88da4955e6301cde9f5
+HEAD is now at 3f57733 feat(styling): Extract CSS to external stylesheet
+Factcheck Agent: Running Ruff on the PR head.
+All checks passed!
+Factcheck Agent: Running pytest on the PR head.
+============================= test session starts =============================
+platform win32 -- Python 3.14.4, pytest-9.2.0, pluggy-1.7.0
+rootdir: C:\Users\YASASW~1\AppData\Local\Temp\newsroom-factcheck-_21qqjme\app
+configfile: pyproject.toml
+plugins: anyio-4.15.1
+collected 67 items / 1 skipped
+
+app\tests\test_collector.py .............                                [ 19%]
+app\tests\test_db.py ......                                              [ 28%]
+app\tests\test_env.py ..                                                 [ 31%]
+app\tests\test_extras.py .....                                           [ 38%]
+app\tests\test_main.py ..................                                [ 65%]
+app\tests\test_summarizer.py .......................                     [100%]
+
+============================== warnings summary ===============================
+..\..\..\..\..\Yasaswini\AppData\Local\Temp\newsroom-factcheck-_21qqjme\app\.venv\Lib\site-packages\fastapi\testclient.py:1
+  C:\Users\Yasaswini\AppData\Local\Temp\newsroom-factcheck-_21qqjme\app\.venv\Lib\site-packages\fastapi\testclient.py:1: StarletteDeprecationWarning: Using `httpx` with `starlette.testclient` is deprecated; install `httpx2` instead.
+    from starlette.testclient import TestClient as TestClient  # noqa
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+================== 67 passed, 1 skipped, 1 warning in 5.52s ===================
+{"closingIssuesReferences":[{"id":"I_kwDOVbsoSs8AAAABbioy9g","number":14,"repository":{"id":"R_kgDOVbsoSg","name":"autonomous-newsroom","owner":{"id":"U_kgDOCIKVwQ","login":"Lakshmi-Sayyapureddy1819"}},"url":"https://github.com/Lakshmi-Sayyapureddy1819/autonomous-newsroom/issues/14"}],"headRefName":"t14-design-tokens-themes-contrast-shared-layout","headRefOid":"3f57733f0ff040d42360a88da4955e6301cde9f5","isDraft":false,"labels":[{"id":"LA_kwDOVbsoSs8AAAADAFzO7w","name":"status:in-review","description":"PR open, waiting for review","color":"1D76DB"},{"id":"LA_kwDOVbsoSs8AAAADAFzUrw","name":"agent:copydesk","description":"Copydesk turn","color":"BFD4F2"},{"id":"LA_kwDOVbsoSs8AAAADAFzV4A","name":"review:approved","description":"Review passed","color":"0E8A16"}],"mergeable":"MERGEABLE","number":25,"statusCheckRollup":[{"__typename":"CheckRun","completedAt":"2026-11-01T14:54:14Z","conclusion":"FAILURE","detailsUrl":"https://github.com/Lakshmi-Sayyapureddy1819/autonomous-newsroom/actions/runs/41318463115/job/124883431319","name":"gate","startedAt":"2026-11-01T14:54:08Z","status":"COMPLETED","workflowName":"gate"},{"__typename":"CheckRun","completedAt":"2026-11-01T14:54:21Z","conclusion":"FAILURE","detailsUrl":"https://github.com/Lakshmi-Sayyapureddy1819/autonomous-newsroom/actions/runs/41318472195/job/124883456617","name":"gate","startedAt":"2026-11-01T14:54:15Z","status":"COMPLETED","workflowName":"gate"},{"__typename":"CheckRun","completedAt":"2026-11-01T14:54:20Z","conclusion":"FAILURE","detailsUrl":"https://github.com/Lakshmi-Sayyapureddy1819/autonomous-newsroom/actions/runs/41318472276/job/124883456891","name":"gate","startedAt":"2026-11-01T14:54:14Z","status":"COMPLETED","workflowName":"gate"},{"__typename":"CheckRun","completedAt":"2026-11-01T15:00:15Z","conclusion":"FAILURE","detailsUrl":"https://github.com/Lakshmi-Sayyapureddy1819/autonomous-newsroom/actions/runs/41318952657/job/124884888379","name":"gate","startedAt":"2026-11-01T15:00:10Z","status":"COMPLETED","workflowName":"gate"},{"__typename":"CheckRun","completedAt":"2026-11-01T14:54:32Z","conclusion":"SUCCESS","detailsUrl":"https://github.com/Lakshmi-Sayyapureddy1819/autonomous-newsroom/actions/runs/41318463083/job/124883431250","name":"ci","startedAt":"2026-11-01T14:54:08Z","status":"COMPLETED","workflowName":"ci"}],"title":"feat(styling): Extract CSS to external stylesheet"}
+https://github.com/Lakshmi-Sayyapureddy1819/autonomous-newsroom/pull/25
+https://github.com/Lakshmi-Sayyapureddy1819/autonomous-newsroom/pull/25#issuecomment-6559796109
+https://github.com/Lakshmi-Sayyapureddy1819/autonomous-newsroom/issues/14
+Factcheck Agent: PR #25 -> test:passed

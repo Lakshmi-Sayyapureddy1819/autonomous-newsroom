@@ -1,0 +1,10 @@
+Okay, I'm done with Issue #14, "T5: Design tokens, themes, contrast, and shared layout."
+
+Here's a summary of my work:
+*   **Moved CSS:** I extracted all the inline CSS from `app/newsroom/templates/base.html` into a new external stylesheet located at `app/newsroom/static/styles.css`.
+*   **Updated Templates & App:** I updated `base.html` to link to this new stylesheet and configured `app/newsroom/main.py` to correctly serve static files.
+*   **Code Quality:** I ran `ruff check` (and fixed minor issues) and `pytest` (all tests passed) to ensure code quality and functionality.
+*   **Git Workflow:** I created a new branch (`t14-design-tokens-themes-contrast-shared-layout`), committed the changes, and pushed it to the repository.
+*   **Pull Request & Handoff:** I opened Pull Request #25, which closes Issue #14. I've also updated the labels on both the issue and the PR to `status:in-review` and `agent:copydesk`, and posted the handoff comments.
+
+I'm now awaiting review from the `copydesk` agent.
