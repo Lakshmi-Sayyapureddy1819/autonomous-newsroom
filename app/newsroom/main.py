@@ -30,6 +30,12 @@ app = FastAPI(lifespan=lifespan)
 TEMPLATES_DIR = Path(__file__).resolve().parent / "templates"
 templates = Jinja2Templates(directory=TEMPLATES_DIR)
 
+# Brand: change the name and tagline here; every page, the page titles, the footer and the
+# RSS feed pick them up.
+SITE_NAME = "Synapse"
+SITE_TAGLINE = "Every AI story, in one line"
+templates.env.globals.update(site_name=SITE_NAME, site_tagline=SITE_TAGLINE)
+
 STATIC_DIR = Path(__file__).resolve().parent / "static"
 app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 

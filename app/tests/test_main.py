@@ -331,3 +331,35 @@ def test_rss_feed_channel_link_uses_request_base_url(client: TestClient) -> None
     channel = ET.fromstring(response.text).find("channel")
     assert channel is not None
     assert channel.findtext("link") == "http://testserver/"
+
+
+def test_brand_name_and_tagline_appear_everywhere(client: TestClient) -> None:
+    from newsroom.main import SITE_NAME, SITE_TAGLINE
+
+    for path in ("/", "/runs", "/no-such-page"):
+        text = client.get(path, headers={"accept": "text/html"}).text
+        assert "<title>" in text and SITE_NAME in text, path
+        assert SITE_TAGLINE in text, path
+        assert "Autonomous Newsroom" not in text, path
+
+
+def test_rss_channel_uses_brand_name(client: TestClient) -> None:
+    from newsroom.main import SITE_NAME
+
+    text = client.get("/rss.xml").text
+    assert f"<title>{SITE_NAME}</title>" in text
+    assert "Autonomous Newsroom" not in text
+
+
+def test_synapse_logo_assets_are_served_and_linked(client: TestClient) -> None:
+    page = client.get("/", headers={"accept": "text/html"}).text
+    for name in (
+        "synapse-logo.svg",
+        "synapse-logo.png",
+        "synapse-wordmark-light.svg",
+        "synapse-wordmark-dark.svg",
+    ):
+        assert f"/static/brand/{name}" in page, name
+        response = client.get(f"/static/brand/{name}")
+        assert response.status_code == 200, name
+        assert len(response.content) > 0, name
