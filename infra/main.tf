@@ -81,6 +81,7 @@ resource "oci_core_instance" "newsroom" {
   compartment_id      = var.compartment_id
   availability_domain = data.oci_identity_availability_domains.home_region.availability_domains[0].name
   display_name        = var.instance_name
+  fault_domain        = var.fault_domain
   shape               = "VM.Standard.A1.Flex"
 
   shape_config {

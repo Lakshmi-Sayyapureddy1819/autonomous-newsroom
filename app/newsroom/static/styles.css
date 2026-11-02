@@ -746,7 +746,11 @@
         @media (max-width: 560px) {
             .container { padding: 0 16px; }
             .brand-tagline { display: none; }
-            .nav a:not(.rss) { display: none; }
+            /* Keep Home and Runs reachable on phones: compact the nav and drop the wordmark
+               (the logo mark still links home) so everything fits on one row. */
+            .brand-name { display: none; }
+            .nav { gap: 4px; }
+            .nav a { padding: 8px 10px; font-size: 0.88rem; }
             .grid { grid-template-columns: minmax(0, 1fr); }
             .hero-inner { padding-top: 36px; padding-bottom: 28px; }
             .stat { flex: 1 1 40%; min-width: 0; }

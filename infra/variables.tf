@@ -66,6 +66,12 @@ variable "instance_boot_volume_gbs" {
   default     = 50
 }
 
+variable "fault_domain" {
+  description = "Optional fault domain (FAULT-DOMAIN-1/2/3). Null lets OCI choose. Pin one only to work around per-fault-domain 'Out of host capacity'."
+  type        = string
+  default     = null
+}
+
 variable "instance_name" {
   description = "Display name for the single newsroom VM."
   type        = string
