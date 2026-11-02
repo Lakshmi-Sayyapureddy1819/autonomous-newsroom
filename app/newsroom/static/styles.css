@@ -94,6 +94,8 @@
             box-shadow: 0 4px 12px rgba(36, 87, 245, 0.35);
         }
 
+        img.brand-mark { display: block; background: none; box-shadow: 0 4px 12px rgba(36, 87, 245, 0.35); }
+
         .brand-name {
             font-family: var(--serif);
             font-weight: 700; font-size: 1.35rem;
@@ -739,6 +741,11 @@
             color: var(--text-muted); font-size: 0.88rem;
         }
 
+        .footer-brand { display: inline-flex; align-items: center; gap: 12px; }
+        .wordmark { height: 28px; width: auto; }
+        .wordmark-dark { display: none; }
+        :root[data-theme="dark"] .wordmark-light { display: none; }
+        :root[data-theme="dark"] .wordmark-dark { display: inline-block; }
         .footer-inner { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 10px 24px; }
         .footer-inner a { color: var(--accent); text-decoration: none; font-weight: 600; }
         .footer-inner a:hover { text-decoration: underline; }
