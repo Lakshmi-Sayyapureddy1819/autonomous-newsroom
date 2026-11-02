@@ -1,152 +1,269 @@
-# Autonomous Newsroom delivery
+# Autonomous Newsroom: Delivery Report
 
-**Status as of November 2, 2026 (12:27 UTC):** T0-T4 and the RSS-link fix (Issue #12 / PR #13) are merged. **PR #25 (Issue #14, CSS extraction) was merged by the owner at 11:49 UTC** (merge commit `b9cb077`, head `c892dd3`) and Issue #14 is closed. **PR #26 (Synapse branding) was merged at 12:25 UTC** (merge commit `93dce88`). PR #22, a broken duplicate UI-polish PR, was closed unmerged. Issues #15-#18 have not been worked through the agent workflow. The product is **deployed and publicly reachable at https://34.10.175.17.sslip.io/** (Google Cloud VM, owner-confirmed). That deployment has **not** been updated since these merges: a check at 12:27 UTC still showed the old title "Autonomous Newsroom" and no Synapse branding, so the mobile-nav fix (PR #25) and the Synapse branding (PR #26) are in `main` but not live. The Terraform in `infra/` targets Oracle Cloud and was **not** used for this deployment (its local state has networking resources only, no compute instance). Still outstanding: redeploying the VM from `main`, recorded evidence of the scheduled refresh running on the VM, and UI-polish tickets #15-#18.
+*Verified against GitHub, the repository and local runtime records on November 2, 2026 (code on `main` as of `93dce88`; the docs-only PR #27 was merged afterwards as `831dfae`). All times are UTC.*
 
-## Handoff
+**Contents**
+[1. Overview](#1-project-overview) · [2. Agent roster](#2-agent-roster) · [3. Architecture and workflow](#3-architecture-and-workflow) · [4. What was delivered](#4-implementation-delivered) · [5. Validation evidence](#5-validation-evidence) · [6. Failures and recovery](#6-failure-and-recovery) · [7. Deployment status](#7-deployment-status) · [8. Reproduction](#8-reproduction) · [9. Limitations and next steps](#9-limitations-and-next-steps) · [10. Conclusion](#10-conclusion)
 
-- **Repository:** [Lakshmi-Sayyapureddy1819/autonomous-newsroom](https://github.com/Lakshmi-Sayyapureddy1819/autonomous-newsroom)
-- **Local preview:** `http://localhost:8000/` was open in the local browser when this handoff was prepared. This is not the required public URL.
-- **Public URL:** https://34.10.175.17.sslip.io/ (HTTPS; `sslip.io` maps the VM's public IP `34.10.175.17` to a hostname so Caddy can obtain a Let's Encrypt certificate without a purchased domain).
-- **Hosting method:** Google Cloud (GCP) VM, set up by the owner outside this repo's Terraform. The stack matches `deploy/`: Caddy (TLS and reverse proxy, `deploy/Caddyfile`) in front of uvicorn on `127.0.0.1:8000`, with the refresh job on a systemd timer (`deploy/systemd/`). The exact VM type, region and install steps were not recorded here; **owner to fill in**.
-- **Smoke test (Nov 2, 2026, 11:16 UTC, run from this repo's Claude Code session):** `GET /` returned HTTP 200. `GET /rss.xml?format=xml` returned HTTP 200, `Content-Type: application/xml`, `Server: Caddy` / `uvicorn`, valid RSS with real articles and the channel link set to the public URL. The feed's `lastBuildDate` was Nov 2, 2026 10:04 UTC, about an hour earlier, which suggests the refresh is running. This session did **not** inspect the VM, so timer state, refresh interval and the boot-time refresh are unverified.
-- **Re-check (Nov 2, 2026, 12:27 UTC, this session):** `GET /` returned HTTP 200 with 20 articles and "Updated 2 hours ago"; the title was still "Autonomous Newsroom — AI news, summarized" and the page contained no "Synapse". `GET /rss.xml` returned HTTP 200 with channel title "Autonomous Newsroom" and `lastBuildDate` still Mon, 02 Nov 2026 10:04:04 +0000, unchanged since the 11:16 UTC check. That is consistent with a refresh interval of several hours but is not proof of a working timer.
-- **Deployment status:** Deployed on GCP and reachable. The earlier Oracle VM and Cloudflare Quick Tunnel plans were not used. **Known gap:** the live site runs an older build. The mobile-nav fix (in PR #25 head `c892dd3`) and the Synapse branding (PR #26) are in `main` but have not been redeployed; the redeploy steps for the VM are not recorded here.
+**Links:** repository [Lakshmi-Sayyapureddy1819/autonomous-newsroom](https://github.com/Lakshmi-Sayyapureddy1819/autonomous-newsroom) · live site <https://34.10.175.17.sslip.io/> · token report [docs/token-report.md](docs/token-report.md) · protocol [agents/PROTOCOL.md](agents/PROTOCOL.md)
 
-## Agent roster and split
+---
 
-| Agent | Runtime | Role | Models evidenced in the repo history | Tools / boundary |
-|---|---|---|---|---|
-| editor | Hermes | Creates Issues, assigns work, routes retries, escalates blockers | `google/gemini-3.8-flash`, `google/gemini-3.7-flash` appear in handoff estimates | `gh` Issues/comments/labels; no product edits or merges |
-| reporter | OpenClaw | Implements one assigned Issue and opens/updates its PR | `google/gemini-2.5-flash` (confirmed by runtime records); `qwen-2.5-coder-32b` appears in 6 commit trailers but in no runtime record | Git, `gh`, shell, files; no merge |
-| copydesk | Hermes | Reviews every PR against its Issue criteria | `gemini-2.5-flash` appears in an Issue #7 review handoff | PR diff, comments, review labels; no push or merge |
-| factcheck | OpenClaw | Independently tests the PR head and reports evidence | `gemini-2.5-flash` appears in an Issue #7 test handoff | Checkout, tests, lint, runtime commands, verdict labels; no push or merge |
-| human (Lakshmi) | — | Owns credentials and infrastructure; merges after gates | — | Terraform apply, secrets, branch protection, final merge |
+## 1. Project overview
 
-The split makes the work inspectable: OpenClaw builds and tests, Hermes plans and reviews, and GitHub Issues/PRs carry the handoffs and gate labels. Model names above are taken from commit trailers or comments; they are not a claim that every invocation used the same model.
+**Product.** A small news site that updates itself, on the beat "latest AI/ML news". A scheduled job collects public items (Google News RSS search feed and the Hacker News Algolia API, neither needs a key), a model writes a one-line summary and a topic tag for each item, and the rows are stored in SQLite. A FastAPI page lists the articles with summary, tag and source link, shows "Updated X ago", and offers tag filters, search, an RSS feed and a run-history page (`/runs`). The summarizer tries a primary free model and falls back to a second one on HTTP 402/429. The UI was later branded "Synapse".
 
-## Ticket to merged code
+**What the assignment actually tests.** The product is the excuse; the delivery team is the test. The repository therefore contains a small team of agents on two runtimes, coordinated only through GitHub Issues and PRs:
+
+- **Hermes Agent** runs the orchestrator (editor) and reviewer (copydesk) roles.
+- **OpenClaw** runs the builder (reporter) and tester (factcheck) roles.
+- A **dispatcher** (ordinary Python, no LLM) watches GitHub labels and wakes the one agent whose turn it is.
+- **GitHub Actions** (`ci`, `gate`) block a PR unless checks pass and the PR carries both `review:approved` and `test:passed`.
+- **The human owner is the only one who merges.**
 
 ```text
-Need / brief
-  → Editor writes a checkable Issue and assigns Reporter
-  → Reporter claims it, branches, implements, tests, and opens a PR
-  → Copydesk reviews each acceptance criterion and requests changes or approves
-  → Factcheck checks out the PR head and reports independent evidence
-  → Editor routes failures/retries on the same Issue and PR
-  → GitHub CI + review/test labels gate the PR
-  → Lakshmi merges; the Issue closes
+GitHub Issues + PRs (the only channel)
+   ▲ labels, comments, branches      ▲ checks
+   │                                 │
+Dispatcher ──wakes one agent──►  Editor · Reporter · Copydesk · Factcheck
+ (stdlib Python, no LLM)          (Hermes) (OpenClaw) (Hermes)  (OpenClaw)
 ```
 
-## What the team delivered
+Everything below distinguishes what was **verified**, what is **owner-reported**, and what was **not done**.
 
-- **T0, README roster:** Issue #1 / PR #2 documents the four roles and runtimes.
-- **T1, app scaffold:** Issue #3 / PR #4 adds the installable Python package, SQLite schema, and test harness.
-- **T2, RSS collector:** Issue #5 / PR #6 adds fixture-based collection and run tracking. Copydesk found malformed-feed and timestamp gaps, the editor routed attempt 2, and Factcheck recorded a passing result.
-- **T3, summarizer:** Issue #7 / PR #8 adds structured summaries, tags, fallback, model attribution, and offline tests. Copydesk rejected attempt 1 for unsafe handling of empty/invalid summaries. Reporter fixed it on the same PR; Factcheck then recorded 40 passing tests and a clean Ruff run.
-- **T4, public page:** Issue #9 / PR #10 adds the server-rendered list page and RSS endpoint. The PR body records 43 passing tests and a clean Ruff check.
+---
 
-- **RSS fix:** Issue #12 / PR #13 fixed the hard-coded `localhost` channel link. Copydesk requested a test revert first, which the Reporter applied.
-- **UI polish:** Issue #14 / PR #25 (merged) moves CSS to `static/styles.css` (about 760 lines out of `base.html`, plus 4 lines in `main.py` to serve static files). Its final head also carries a mobile-nav CSS fix, brand assets, docs and infra changes (see "PR #25 scope update"). Issues #15-#18 have not started.
-- **Synapse branding:** PR #26 (merged) renames the site to Synapse and serves the logo files from `app/newsroom/static/brand/` (see "PR #26" below).
+## 2. Agent roster
 
-## How the gates actually ran (read this before trusting the labels)
+Role definitions live in [`agents/hermes/profiles/`](agents/hermes/profiles) (`SOUL.md` per profile) and [`agents/openclaw/`](agents/openclaw) (`AGENTS.md` per agent). The shared contract is [`agents/PROTOCOL.md`](agents/PROTOCOL.md). Models are the ones recorded in runtime session stores or commit trailers; an agent did not always use the same model.
 
-Free-tier models hit HTTP 429 repeatedly (see `agents/traces/t4-dispatcher-429.md`). For later PRs the dispatcher was run with `NEWSROOM_REVIEW_MODE=deterministic`, so **PR #25's Copydesk and Factcheck verdicts came from scripts (`agents/scripts/copydesk_agent.py`, `factcheck_agent.py`), not from an LLM reading the acceptance criteria**. Copydesk checks only: one linked Issue, not a draft, no conflicts, `ci` green. Factcheck runs ruff and pytest on the exact PR head. The LLM-driven review/test that rejected T2 and T3 (and PR #13) ran earlier, on Hermes and OpenClaw. Issue #14 also reached `status:blocked` once after three failed Copydesk invocations (rate limits) before a human re-routed it. **The merged head `c892dd3` has no recorded review or test run:** the last copydesk/factcheck comments on PR #25 are for `7f74fd7` and `b7d183f`, yet the PR carried `review:approved` and `test:passed` when it was merged, and `ci` and `gate` passed. This session did not set those labels on `c892dd3` and cannot show who or what did.
+| Agent | Runtime | Role | Model(s) actually recorded | Tools / boundary | What it actually did |
+|---|---|---|---|---|---|
+| **editor** | Hermes (`editor` profile) | Orchestrator: turns the brief into Issues, assigns, escalates | `nvidia/nemotron-3-ultra-550b-a55b:free` (UI-polish tickets session). Model for the T0–T4 ticket creation is **not recorded** (no matching session found) | `gh` Issues/labels/comments. No product edits, no merge | Wrote the Issues for T0–T3 (#1, #3, #5, #7; each has an editor handoff comment) and the UI-polish set #14–#18 ([handoff comment on #14](https://github.com/Lakshmi-Sayyapureddy1819/autonomous-newsroom/issues/14)). No editor comment exists on #9 or #12, so the editor's authorship of those two is not evidenced. Routine retry/escalation duties are done by dispatcher code, not by this agent |
+| **reporter** | OpenClaw | Builder: implements one Issue, opens/updates its PR | Mostly `google/gemini-2.5-flash`; `google/gemini-3.7-flash` in one Issue #12 run; free OpenRouter models in default sessions. 6 early commit trailers say `qwen-2.5-coder-32b`, which **no runtime record supports** | Git, `gh`, shell, files. No merge | Authored 27 of the 29 trailer-bearing commits on `main` (T0–T5 work and fixes). Also the PR #25 scope cleanup |
+| **copydesk** | Hermes (`copydesk` profile) | Reviewer: PR against acceptance criteria | `gemini-2.5-flash` when it responded; configured free `google/gemma-4-31b-it:free` attempts all hit HTTP 429 | PR diff, comments, review labels. No push, no merge | LLM reviews that rejected T2, T3 and PR #13 (see [traces](agents/traces)). For PR #25 a **deterministic script** ran instead |
+| **factcheck** | OpenClaw | Tester: runs the PR head | Configured `nvidia/nemotron-3.5-lightning:free`; the only recorded run (Issue #12) used it and ended `failed`. Models for T2/T3 runs not recorded | Checkout, lint, tests, verdict labels. No push, no merge | LLM-driven tests for T2/T3 (40 passing tests recorded on Issue #7). For PR #25 a **deterministic script** ran instead |
+| **human (owner)** | – | Merges, unblocks, owns credentials and infra | – | Terraform, secrets, branch protection, final merge | Only role permitted to merge; unblocked and re-routed Issue #14 and directed the PR #25 cleanup (section 5) |
 
-Known problems in PR #25 (original commit `3f57733`): it added unrelated files (`pr19/20/21_diff_vs_main.txt`, `.dispatcher-validation/locks/reporter.lock`, brand assets, runbook, Hermes reference notes); those were removed by the reporter's cleanup commit `7f74fd7` (below). **Still true:** `3f57733` carries `Co-authored-by: Lakshmi <Lakshmi_Sayyapureddy1819@users.noreply.github.com>` instead of the protocol's `reporter (openclaw) <reporter@newsroom.agents>`. It stays because the protocol forbids amending or force-pushing pushed commits; `ci` trailer-check still passes. Main also carries `jq.exe` and `desktop.ini`.
+**Why this split.** Builder and tester sit on OpenClaw, which has a per-agent workspace and shell; planner and reviewer sit on Hermes, which has profiles and is cheap for read-mostly work. Every agent holds one role, and tester and reviewer cannot push, so a bad PR must be stopped by someone other than its author.
 
-## PR #25 scope update (November 2, 2026, owner decision)
+**Not agent work (disclosed).** Commit `4b4f629` (PR #26, Synapse branding) is trailed `Agent: human`, `Model: claude-sonnet-5-5`: it was made with Claude Code at the owner's direction and touched 14 files including app templates and tests. The audits, manual label corrections and docs PRs were also done in Claude Code sessions. See [section 5](#5-validation-evidence).
 
-After the agent cleanup below, a human-directed revert (`b7d183f`, made in this Claude Code session at the owner's request) restored the intentionally authored files. A further commit, `c892dd3` ("feat(styling): complete T14 scope - mobile nav, delivery docs, infra fault_domain"), was then pushed to the PR branch. It carries agent trailers (`Agent: reporter`, `Model: google/gemini-2.5-flash`) but this session cannot verify who created it, and it was the head that got merged. What `main` contains as a result: the CSS extraction, a 6-line mobile-nav CSS fix, brand assets (`docs/brand/*`), `docs/brief-ui-polish.md`, `docs/DEPLOYMENT_RUNBOOK.md`, agent traces, an earlier `DELIVERY.md`, the Terraform `fault_domain` option and `infra/.terraform.lock.hcl`, and four dispatcher run-state files under `.dispatcher-validation/` (`issue-14.json` and three logs). `c892dd3` removed `pr19/20/21_diff_vs_main.txt` and `reporter.lock`. **The two `autonomous-ai-agents/` Hermes note files were not removed and are on `main`**, as are `jq.exe` and `desktop.ini`. The statements below about "3 intended files" describe head `7f74fd7` only and are kept as history.
+---
 
-## PR #25 cleanup and re-review (November 2, 2026)
+## 3. Architecture and workflow
 
-**Facts verified on GitHub/git in this session**
+### 3.1 Ticket lifecycle
 
-- **Cleanup commit:** `7f74fd7` ("chore(pr25): remove unrelated and generated files from PR scope") deletes 16 files (11,658 lines), changes no app file, and carries the protocol trailers (`Agent: reporter`, `Runtime: openclaw`, `Model: google/gemini-2.5-flash`, `Ticket: #14`, `Co-authored-by: reporter (openclaw)`). PR #25 now lists exactly `app/newsroom/main.py`, `app/newsroom/static/styles.css`, `app/newsroom/templates/base.html`.
-- **LLM agent work:** the reporter (OpenClaw, `google/gemini-2.5-flash`) made that commit and wrote its handoff comments. It took **three dispatcher attempts**: attempts 1 and 2 exited 0 but changed nothing (attempt 1 claimed the work was already done from stale session memory; attempt 2 asked for the file list because it could not read the Issue). Attempt 3 (cleanup file list inline in the prompt) succeeded.
-- **Root cause of the failures (OpenClaw working-directory bug):** `~/.openclaw/openclaw.json` set the reporter's `cwd` to `C:UsersYasaswiniautonomous-newsroom-t4` (backslashes stripped, and pointing at an old worktree). Every `exec` call failed with `workdir unavailable`, so the agent could not run `git`, `gh` or a shell. A first diagnostic run falsely reported PASS for all checks; a stricter rerun exposed the failures. **Fix:** the one `cwd` line was changed to `C:/Users/Yasaswini/nr-pr25-clean` (config backed up first, outside the repo). A rerun diagnostic then showed real output (`gh` authenticated, git 2.53.0, HEAD `3f57733`, Issue comment readable). **Caveat:** that `cwd` now points at a temporary clean clone and must be repointed for future tickets.
-- **Scripted (non-LLM) review and test:** `NEWSROOM_REVIEW_MODE=deterministic`, so `review:approved` came from `copydesk_agent.py` (one linked Issue, not a draft, no conflicts, `ci` green) and `test:passed` came from `factcheck_agent.py` (ruff and pytest on the exact head `7f74fd7`). These are **not** LLM Copydesk/Factcheck reviews against the acceptance criteria. The LLM Hermes copydesk could not be used because of OpenRouter rate limits.
-- **Two false test failures first:** the first two factcheck runs wrote `test:failed` (`Ruff check failed on the PR head.`). `uv run ruff check app/` passes on that commit when run by hand; the failures came from running the dispatcher with a virtualenv's Python, which made `uv`'s build subprocess load the wrong standard library (`SRE module mismatch`). Re-running the dispatcher with the plain `py` interpreter produced a genuine `test:passed`. The failed-verdict comments remain on the PR as record.
-- **Manual label actions (human-authorized, done by the Claude Code session, not by an agent):** stale `review:approved`/`test:passed` were removed from PR #25 before cleanup; Issue #14 was relabeled `status:ready` + `agent:reporter` (from `status:ready-to-merge`) to wake the reporter; and `test:failed` plus the editor re-route were reset twice for the factcheck reruns.
-- **State at that head (`7f74fd7`, history):** `ci` pass, `gate` pass, labels `review:approved` + `test:passed`. This was superseded: `b7d183f` reverted the cleanup, the scripted copydesk approved `b7d183f`, the scripted factcheck run for `b7d183f` was interrupted by network errors and never produced a verdict, and the PR was merged at head `c892dd3` (see the scope update). Issue #14 is closed.
-- **Local test evidence (clean clone, same app files as the PR head):** `ruff check app/` clean; `pytest app/tests` 67 passed, 1 skipped; `pytest agents/dispatcher/tests` 46 passed. The dispatcher tests use fake GitHub and fake agents, so they test the dispatcher logic, not the live agents.
+```mermaid
+flowchart TD
+    B["docs/brief.md"] --> E["Editor (Hermes)<br/>writes Issue: Goal, Acceptance criteria,<br/>Out of scope, Depends on<br/>status:ready + agent:reporter + attempt:1"]
+    E --> D{{"Dispatcher tick<br/>(dispatch.sh, no LLM)"}}
+    D -->|"status:ready + agent:reporter"| R["Reporter (OpenClaw)<br/>claims, branches, commits, opens PR 'Closes #N'<br/>status:in-progress, then status:in-review + agent:copydesk"]
+    R --> D
+    D -->|"status:in-review + agent:copydesk"| C["Copydesk (Hermes)<br/>reviews PR vs each criterion"]
+    C -->|"review:changes-requested"| RT["Dispatcher editor duties (code)<br/>attempt+1, status:ready, agent:reporter<br/>same branch and PR"]
+    RT --> D
+    C -->|"review:approved<br/>status:in-test + agent:factcheck"| F["Factcheck (OpenClaw)<br/>runs lint + tests on the exact PR head SHA"]
+    F -->|"test:failed"| RT
+    F -->|"test:passed<br/>status:ready-to-merge"| G{"GitHub gate<br/>ci green AND review:approved AND test:passed"}
+    G -->|pass| H["Human merges in the GitHub UI<br/>Issue auto-closes"]
+    RT -->|"attempt > 3"| X["status:blocked + agent:editor<br/>escalation comment for the human"]
+    X --> H2["Human unblocks"]
+```
 
-**Not done / not claimed:** the live-agent handoff for the final cleanup attempt has no token figures ("estimate not available"); the skipped test was not investigated; the scheduled-refresh evidence on the GCP VM (timer status, run history) is not recorded here.
+Agents act as the repository owner's GitHub user, so identity is proven by commit trailers (`Agent`, `Runtime`, `Model`, `Ticket`, `Co-authored-by`) and by the agent named in each handoff comment, not by the GitHub actor. CI's `trailer-check` fails a PR that changes `app/` or `deploy/` without them.
 
-## PR #26: Synapse branding (November 2, 2026)
+### 3.2 Labels as the state machine
 
-- **What:** PR #26 (head `4b4f629`, merged 12:25 UTC as `93dce88`, 14 files) adds `SITE_NAME = "Synapse"` and `SITE_TAGLINE = "Every AI story, in one line"` and uses them in page titles, meta/og tags, the RSS link, header, footer, the error/runs/feed pages, and the RSS channel title and description. The six logo and wordmark files are served from `app/newsroom/static/brand/` (header mark, favicon, light/dark footer wordmark). Three tests were added (brand name and tagline on all pages, RSS title, logo assets linked and served).
-- **Origin of the change:** the branding parts were ported from a local-only branch, `validate/workflow-wip` (never pushed to GitHub; backed up as a git bundle outside the repo). Its unrelated parts (dispatcher, infra, docs, a JS refactor) were not ported. PR #22, which was meant to carry UI polish, contained no Synapse content and its files sat under a broken `UsersYasaswiniautonomous-newsroom-t4/` path (the same broken working-directory setting described above), so it was closed unmerged.
-- **Not agent-authored:** this was a human-directed change made with Claude Code, not by the reporter. Its commit trailers say `Agent: human`, `Runtime: claude-code`, `Model: claude-sonnet-5-5`, `Ticket: none`. There was no Copydesk or Factcheck review.
-- **Why the gate passed without verdict labels:** PR #26 closes no Issue, so the gate (`.github/scripts/gate_decide.sh`) treats it as a maintenance PR and does not require `review:approved` or `test:passed`. `ci` (secret scan, author/trailer check, ruff, pytest) and `gate` both passed.
-- **Verified before merge:** `ruff check app/` clean; `pytest app/tests` 70 passed, 1 skipped. On a local copy of the database the page returned HTTP 200 with 20 articles, the title "Synapse — Every AI story, in one line", the logo, wordmark, CSS, RSS and runs URLs returned 200, and no "Autonomous Newsroom" text remained on the page.
-- **Not verified / not done:** the visual appearance was not checked by the assistant (no browser view was available to it), and the live VM has not been redeployed with this change.
+| Label | Meaning | Set by |
+|---|---|---|
+| `status:ready` / `in-progress` / `in-review` / `in-test` / `ready-to-merge` / `blocked` | Where the ticket is | editor, reporter, copydesk, factcheck, dispatcher |
+| `agent:<role>` | Who owns the next step (exactly one) | editor or the handing-off agent |
+| `review:approved` / `review:changes-requested` | Review verdict (on the PR) | copydesk |
+| `test:passed` / `test:failed` | Test verdict (on the PR) | factcheck |
+| `attempt:<n>` | Build attempt, 1 to 3 | dispatcher |
 
-## Real review/retry evidence
+### 3.3 Dispatcher behaviour
 
-- [Copydesk's T3 blocking review on Issue #7](https://github.com/Lakshmi-Sayyapureddy1819/autonomous-newsroom/issues/7#issuecomment-6516849264) found that empty or malformed summaries could be stored as successful output.
-- [Editor routed T3 attempt 2 on the existing PR](https://github.com/Lakshmi-Sayyapureddy1819/autonomous-newsroom/issues/7#issuecomment-6516885679). The comment records estimated editor usage; it does not claim an exact provider measurement.
-- [Factcheck's T3 result](https://github.com/Lakshmi-Sayyapureddy1819/autonomous-newsroom/issues/7#issuecomment-6540142986) records 40 passing tests, clean Ruff, and the exact PR head checked.
-- A separate real retry is recorded for [the T2 collector on Issue #5](https://github.com/Lakshmi-Sayyapureddy1819/autonomous-newsroom/issues/5), where review found missing malformed-feed/timestamp handling before the second attempt passed.
+Code: [`agents/dispatcher/dispatch.py`](agents/dispatcher/dispatch.py), [`editor_lifecycle.py`](agents/dispatcher/editor_lifecycle.py), docs in [`agents/dispatcher/README.md`](agents/dispatcher/README.md).
 
-The short excerpts in [agents/traces/t3-attempt2.md](agents/traces/t3-attempt2.md) point to the original comments. No rejection or test result was invented for this handoff.
+- **Wake-up.** Each tick polls open Issues and their PRs' verdict labels through `gh`, then wakes only the agent in the single `agent:*` label. It wakes nobody for `status:ready-to-merge` or `status:blocked`.
+- **Editor duties as code.** Rejected tickets get `attempt+1` and go back to `agent:reporter`; a third failure sets `status:blocked` and `agent:editor` with an escalation comment; tickets waiting on `Depends on:` are promoted when their dependencies close. The Hermes editor is woken only to author tickets from the brief.
+- **Locking.** One lock file per agent in the state directory, so agents run in parallel but never twice at once. A lock older than the agent timeout is treated as stale.
+- **Retry and backoff.** One JSON state file per ticket records failures. A non-zero exit, a timeout, or an exit 0 with no label change counts as a failure. Defaults: timeout 900 s, 40 turns, backoff 60 s (30× longer after HTTP 402/429), three failures maximum.
+- **Output sanitising.** Token patterns are redacted before output reaches state, logs or comments.
+- **Deterministic review/test mode** (`NEWSROOM_REVIEW_MODE=deterministic`). Added because free models were rate-limited. Copydesk and Factcheck then run [`copydesk_agent.py`](agents/scripts/copydesk_agent.py) and [`factcheck_agent.py`](agents/scripts/factcheck_agent.py). Copydesk checks only: PR closes one Issue, not a draft, no conflicts, `ci` green. Factcheck needs `review:approved` and green `ci`, runs `ruff` and `pytest` on the exact head SHA in a throwaway worktree, and writes `test:passed` or `test:failed` only from that result. **Neither reads the acceptance criteria.**
 
-## Models and tokens
+### 3.4 Automatic versus human actions
 
-**Why this was incomplete.** The dispatcher did not capture usage when runs finished, and agents could only estimate their own usage in handoff comments. Those estimates were far too low. On Nov 2, 2026 the usage was recovered read-only from the runtimes' own stores (Hermes `state.db` per profile; OpenClaw per-agent session database with a usage object on each assistant message). The method and caveats are in [TOKEN_USAGE_AUDIT.md](TOKEN_USAGE_AUDIT.md), and the figures are in [docs/token-report.md](docs/token-report.md).
+| Step | Who |
+|---|---|
+| Writing Issues | Editor agent (LLM) |
+| Claim, branch, code, PR | Reporter agent (LLM, OpenClaw), woken by the dispatcher |
+| Review verdict | Copydesk: LLM for T2, T3, PR #13; **script** for PR #25 |
+| Test verdict | Factcheck: LLM for T2, T3; **script** for PR #25 |
+| Retry routing, blocking, escalation | Dispatcher code |
+| **Starting each dispatcher tick** | **Human (manual)**: no unattended scheduler was running for the validated runs |
+| Unblocking, re-labelling, scope decisions, merging | Human |
 
-**Measured (runtime-reported, not provider billing):** examples, all in input / output / cache-read tokens:
-- Reporter (OpenClaw, `google/gemini-2.5-flash`), Issue #12, 4 runs (3 marked failed): 392,419 / 24,744 / 3,383,882.
-- Reporter, Issue #14, 5 runs: 436,908 / 28,671 / 3,300,036. PR #25 cleanup, 2 runs: 39,037 / 2,295 / 188,113.
-- Copydesk (Hermes, `gemini-2.5-flash`), Issue #12 review: 79,485 / 7,534 / 237,381. Issue #7 attempt-2 review: 126,692 / 9,191 / 180,435.
-- Editor (Hermes, `nvidia/nemotron-3-ultra-550b-a55b:free`), UI-polish tickets: 442,006 / 8,792 / 1,563,840.
+---
 
-Cache-read tokens are context re-read on every call, not new text. The scripted copydesk/factcheck runs use no LLM tokens. The earlier "measured" figure here (32,423 / 1,266 / 73,637) was a diagnostic session and is not task usage, so it is no longer used as such.
+## 4. Implementation delivered
 
-**Corrections and gaps.**
-- The earlier estimate ledger named `qwen-2.5-coder-32b` for the reporter. No runtime record shows that model being used, so treat that trailer value as unsupported.
-- Eight Hermes copydesk sessions (Issues #12 and #14) failed with HTTP 429 and recorded 0 tokens. The real count is unknown.
-- No session was found for the early T0-T2 editor and copydesk work or the T2/T3 factcheck runs.
-- No provider billing export was checked, so no dollar cost is claimed. Hermes stores an estimated cost only.
-- Long default reporter sessions mix several tickets and are reported separately, not assigned to one ticket.
+All code below was merged to `main` through reviewed PRs.
 
-## Reproduce locally (works today)
+| Ticket | Issue / PR | What was delivered |
+|---|---|---|
+| T0 | [#1](https://github.com/Lakshmi-Sayyapureddy1819/autonomous-newsroom/issues/1) / [#2](https://github.com/Lakshmi-Sayyapureddy1819/autonomous-newsroom/pull/2) | README roster (docs only) |
+| T1 | #3 / #4 | Installable Python package, SQLite schema, test harness |
+| T2 | #5 / #6 | RSS collector, run tracking, malformed-feed and timestamp handling (rejected once, fixed on attempt 2) |
+| T3 | #7 / #8 | LLM summarizer with tags, primary-to-fallback on 402/429, strict parsing (rejected once, fixed on attempt 2) |
+| T4 | #9 / #10 | Server-rendered list page, RSS endpoint, "updated X ago", SQLite threading fix |
+| Fix | #12 / #13 | RSS channel link no longer hard-coded to `localhost` (Copydesk requested a test revert, applied) |
+| Infra | – / #23, #24 | Dispatcher resolves Issue to PR and wires the deterministic Copydesk/Factcheck; gate skips verdict labels for maintenance PRs that close no Issue |
+| T5 | #14 / #25 | CSS moved to `app/newsroom/static/styles.css`, base template links it. The merged PR also carries owner-added brand assets, runbook, infra `fault_domain` option, traces and validation logs (see 5.3) |
+| Brand | – / #26 | Synapse name, tagline and logo across the site. **Human/Claude Code authored, not an agent PR** |
 
-From the repository root, with Python 3.12+ and `uv`:
+Other artifacts in the repo:
 
-1. Lint and test exactly as CI does: `uv run --project app --extra dev ruff check app/` and `uv run --project app --extra dev pytest app/tests/` (70 passed, 1 skipped on the PR #26 head). Dispatcher tests: `python -m pytest agents/dispatcher/tests -q` (46 passed; needs `pytest`).
-2. Start the app: `uvicorn app.newsroom.main:app --port 8000` (from the handoff comment on Issue #14; this session did not re-verify the page contents).
-3. Open `http://localhost:8000/`. This is a local check only, not a public deployment.
+- **Gate and CI:** [`.github/workflows/ci.yml`](.github/workflows/ci.yml) (ruff, pytest, gitleaks, trailer-check) and [`gate.yml`](.github/workflows/gate.yml). Branch protection requires both.
+- **Agent configs and prompts:** [`agents/hermes/`](agents/hermes), [`agents/openclaw/`](agents/openclaw) (including `agents.example.json`), [`agents/bootstrap.sh`](agents/bootstrap.sh). Secrets are not in git.
+- **Deployment files:** [`deploy/`](deploy) (Caddyfile, `install.sh`, `newsroom-web`/`newsroom-refresh` systemd units), [`infra/`](infra) (Oracle Cloud Terraform), [`docs/DEPLOYMENT_RUNBOOK.md`](docs/DEPLOYMENT_RUNBOOK.md).
+- **Tests:** 70 passed and 1 skipped for the app, 46 passed for the dispatcher, `ruff` clean, all re-run on `main` at `93dce88` on November 2, 2026. The dispatcher tests use a fake GitHub and fake agents, so they test dispatcher logic, not live agents.
+- **Open and unstarted:** Issues #15–#18 (UI polish) were never started. PR #27 (docs) was merged at 14:20 UTC. PR #22, an earlier duplicate UI-polish PR whose files sat under a broken `UsersYasaswiniautonomous-newsroom-t4/` path and which carried no Synapse content, was closed unmerged at 12:16 UTC.
 
-To reproduce the agent workflow: run `bash agents/dispatcher/dispatch.sh --dry-run`, then without `--dry-run`. For deterministic review/test set `NEWSROOM_REVIEW_MODE=deterministic`. On Windows, run the dispatcher with the plain system Python, not a virtualenv's Python (see the `SRE module mismatch` note above).
+---
 
-## Reproduce the repository setup
+## 5. Validation evidence
 
-1. Configure OCI credentials locally and fill `infra/terraform.tfvars` from the ignored example. Select and pin an Ubuntu 24.04 aarch64 image OCID for the chosen region.
-2. From the repository root, review and apply the plan: `terraform -chdir=infra init`, `terraform -chdir=infra validate`, `terraform -chdir=infra plan`, then `terraform -chdir=infra apply`.
-3. SSH to the Ubuntu instance and run `sudo bash agents/bootstrap.sh`. Authenticate `gh` and configure provider credentials locally for the agent runtimes. The bootstrap script does not embed secrets.
-4. Install `agents/dispatcher/dispatcher.service` and `dispatcher.timer`, start role-specific tmux sessions, and enable the timer.
-5. Install the product from the repo using `sudo bash deploy/install.sh`. Put summarizer credentials only in `/etc/newsroom.env`; open 80/443 in the OCI security list and verify the refresh timer.
-6. Visit the resulting public URL and confirm that several stories load and the page reports a recent refresh. Record that URL and the command/output in this document.
+### 5.1 Where the agents ran
 
-The steps above describe the Oracle/Terraform path, which was not applied. The product was instead deployed on a GCP VM (see Handoff); the `deploy/` scripts and the Caddy/systemd layout are the same.
+The agent runtimes, the dispatcher and the validation runs all ran **on the owner's Windows laptop** (log paths are `C:/Users/...`, tests ran under `win32`, Python 3.14). They did not run on the cloud VM. This is the assignment's "own machine" fallback; no agent runtime was installed or validated on the VM.
 
-## Runtime dashboards
+### 5.2 The Issue #14 / PR #25 cycle (November 1, 2026)
 
-Bind each runtime dashboard to loopback on the VM. After checking the actual configured ports with the runtime status commands, create an SSH tunnel from your workstation:
+Evidence: [`.dispatcher-validation/logs/`](.dispatcher-validation/logs), Issue/PR timelines and comments.
+
+| Step | Who ran it | Evidence |
+|---|---|---|
+| Issue #14 routed to reporter | Re-labelled `status:ready` + `agent:reporter` at 14:45 (before the reporter log starts at 14:48:50). Who applied this label is not distinguishable on GitHub | Issue timeline |
+| Reporter implemented and opened PR #25 | **Reporter agent (OpenClaw, LLM), woken by the dispatcher.** Branch `t14-design-tokens-themes-contrast-shared-layout`, head `3f57733` | `reporter-14-1793544530.log` (started 14:48:50), commit trailers `Agent: reporter`, `Model: google/gemini-2.5-flash` |
+| Review | **`copydesk_agent.py` (deterministic, no LLM)**, 15:00 → `review:approved` on `3f57733`. Mechanical checks only | `copydesk-14-1793545203.log`, PR comment |
+| Test | **`factcheck_agent.py` (deterministic, no LLM)**, 15:12. `ruff` passed; **67 passed, 1 skipped** on the exact head `3f57733`; then `test:passed` | `factcheck-14-1793545925.log`, PR comment |
+| Gate | `ci` and `gate` green on that head; Issue moved to `status:ready-to-merge` | PR checks, Issue timeline |
+
+The dispatcher invocation of each step is confirmed by the per-invocation logs. **Each dispatcher tick was started manually by the owner** (owner-stated; consistent with the log times, which are about 12 minutes apart). The `dispatcher.timer` was not what triggered these runs, so **unattended five-minute operation was not validated.**
+
+### 5.3 What happened afterwards
+
+- **Scope cleanup (November 2).** PR #25 had carried unrelated generated files. After a human-authorised cleanup request, the reporter removed them in commit `7f74fd7` (agent trailers present; three dispatcher attempts, two of which exited 0 without changing anything, see section 6). Copydesk (script) approved and Factcheck (script) passed on `7f74fd7` after two false failures (section 6).
+- **Owner-directed scope change.** The owner then reverted that cleanup on the branch (`b7d183f`) and restored brand assets, runbook, traces and the Terraform option, and force-pushed head `c892dd3` at 11:43. PR #25 was merged on November 2 at 11:49 UTC.
+- **Consequence for the evidence.** `c892dd3` carries `Agent: reporter` trailers, but no OpenClaw session or dispatcher log exists near its commit time (the last recorded reporter session ended 07:20 UTC), and its message describes owner-directed additions including a small CSS change. **There is no record of an agent review or test run on the merged head `c892dd3`**: the last Copydesk comment is on `b7d183f`, and the final `test:passed` label (11:48) has no Factcheck comment. The gate only checks that the labels exist, so it was green. Treat the reporter trailers on `c892dd3` as unverified.
+- **Stray files that reached `main`.** `.dispatcher-validation/` logs, `autonomous-ai-agents/` note files, plus earlier `jq.exe` and `desktop.ini`. They are harmless but unrelated to the product.
+- **Manual label changes.** Done by the owner or a Claude Code session, not by an agent: stale `review:*`/`test:*` removal, re-routing Issue #14 twice, resetting `test:failed` for reruns. Issue #14 was closed with stale `status:in-test` / `agent:factcheck` / `attempt:1` labels.
+
+### 5.4 Earlier LLM-driven review and retry (not deterministic)
+
+| Ticket | Evidence |
+|---|---|
+| T2 (#5) | Copydesk `review:changes-requested` (missing malformed-feed and timestamp handling), editor routed attempt 2, fix `0659a13`, Factcheck passed. [Trace](agents/traces/t2-attempt2.md) |
+| T3 (#7) | Copydesk rejected unsafe empty-summary handling; editor routed attempt 2; Factcheck recorded 40 passing tests and clean ruff. [Trace](agents/traces/t3-attempt2.md) |
+| PR #13 (#12) | Hermes copydesk on Gemini rejected a test change; reporter reverted it. [Trace](agents/traces/t4-dispatcher-429.md) |
+
+### 5.5 Summary of what was and was not tested
+
+| | |
+|---|---|
+| **Tested locally** | App tests, dispatcher tests and `ruff` (above); dispatcher-launched reporter, deterministic copydesk and factcheck for PR #25 on head `3f57733` |
+| **Run by the dispatcher** | The three steps in 5.2 |
+| **Started by a human** | Every dispatcher tick (owner-stated); merging; label corrections; the brand PR |
+| **Not tested** | Unattended timer-driven operation; agents running on the VM; an LLM review of PR #25's acceptance criteria; any agent review/test of the merged head `c892dd3`; the PR #26 change by any agent |
+
+---
+
+## 6. Failure and recovery
+
+**1. Free-model rate limits (HTTP 429) blocked Copydesk.** The dispatcher woke Copydesk for Issue #12, each attempt failed with `HTTP 429 free-models-per-day`, it backed off instead of retrying, and after three failures on Issue #14 it set `status:blocked` + `agent:editor` and posted an escalation comment (November 1, 11:06 UTC, [Issue #14](https://github.com/Lakshmi-Sayyapureddy1819/autonomous-newsroom/issues/14)). Excerpt: [`agents/traces/t4-dispatcher-429.md`](agents/traces/t4-dispatcher-429.md). The owner unblocked it at 14:25. The runtime recorded seven rate-limited Copydesk task sessions (three for #12, four for #14) with 0 tokens. **Recovery:** re-run on a Gemini model, then add deterministic review/test mode (PR #23). **Cost of the fix:** PR #25 got script verdicts, not LLM review.
+
+**2. Gate blocked maintenance PRs.** `gate` required both verdict labels on every PR, which no PR without an Issue can satisfy. Caught when PR #23 could not turn green; fixed in PR #24 (gate passes when a PR closes no Issue; ticket PRs unchanged).
+
+**3. Reporter could not run any shell command.** The reporter's `cwd` in the OpenClaw config pointed at an old worktree path (backslashes stripped), so every `exec` failed. Attempts 1 and 2 of the PR #25 cleanup exited 0 but changed nothing; a first diagnostic falsely reported success and a stricter rerun exposed it. Fixing the one `cwd` line let attempt 3 succeed. *Source: owner/session notes; the current config is confirmed to have a `cwd` set, pointing at a temporary clone (`nr-pr25-clean`) that must be repointed for future tickets.*
+
+**4. Two false `test:failed` verdicts.** Factcheck's first two runs on `7f74fd7` wrote `test:failed` ("Ruff check failed", PR comments 07:24 and 07:26), although `ruff` passes by hand. Cause per the session notes: the dispatcher was started with a virtualenv's Python, which broke `uv`'s subprocess; rerunning with the plain system Python produced a genuine `test:passed` (07:27). The failed verdict comments remain on the PR as a record.
+
+**5. Token tracking was not captured by design.** The dispatcher did not save usage when runs ended, and agents' own estimates were far too low. Usage was recovered afterwards from the runtimes' local stores; see [docs/token-report.md](docs/token-report.md).
+
+---
+
+## 7. Deployment status
+
+| Item | Status |
+|---|---|
+| Public site | <https://34.10.175.17.sslip.io/> returned HTTP 200 on November 2, 2026 (checked from outside only): list page with article cards and "Updated 1 minute ago", and `/rss.xml?format=xml` returned HTTP 200 |
+| Re-check at 12:27 UTC | Repeated from outside: `GET /` HTTP 200 with 20 articles, "Updated 2 hours ago", title still "Autonomous Newsroom — AI news, summarized" and no "Synapse" on the page. `GET /rss.xml` HTTP 200, channel title "Autonomous Newsroom", `lastBuildDate` Mon, 02 Nov 2026 10:04:04 +0000, unchanged since an earlier 11:16 UTC check (consistent with an interval of several hours, not proof of a working timer) |
+| Hosting | A **Google Cloud (GCP) VM**, Ubuntu 24.04 x86_64, created by the owner outside this repository's Terraform. The stack follows `deploy/`: Caddy for HTTPS (`sslip.io` hostname for a Let's Encrypt certificate) in front of uvicorn on `127.0.0.1:8000`, plus a refresh timer. Machine type, region and free-tier/credit status are **not recorded here** |
+| Is it the latest `main`? | **No.** The live HTML contains no "Synapse" text, so it is the pre-branding build. The CSS extraction and mobile-nav fix from PR #25 and the branding from PR #26 are **not confirmed deployed**. A redeploy from `main` is outstanding |
+| Refresh schedule on the VM | The page's recent "updated" time suggests the refresh job runs. Timer state, interval and run history on the VM were **not inspected** |
+| Agents / dispatcher on the VM | **Not deployed or validated.** `dispatcher.service`/`.timer` and `bootstrap.sh` exist in the repo but were not shown running on the VM |
+| Oracle Cloud (Terraform) | Terraform files exist in [`infra/`](infra) but were never applied successfully. The local state (git-ignored) contains **networking resources only** (VCN, internet gateway, route table, security list, subnet): **no compute instance was ever created**, so the Oracle VM was not provisioned |
+
+**Oracle "Out of host capacity".** What is verified: no Oracle instance exists in the Terraform state, and a `fault_domain` variable was added to `infra/` whose description names per-fault-domain "Out of host capacity" as the reason ([`infra/variables.tf`](infra/variables.tf)). What is **not** available: the saved error output, the dates, regions and availability domains tried, and the number of retries. The owner reports that capacity was the blocker; the repository does not contain proof of the individual attempts. The assignment's guidance for this case was to try other domains or sizes, then fall back to AWS, then to the owner's own machine; the project instead used a GCP VM for the site and the laptop for the agents.
+
+---
+
+## 8. Reproduction
+
+### 8.1 Validated local path
+
+Prerequisites: Python 3.12+ (the runs used 3.14), [`uv`](https://docs.astral.sh/uv/), `git`, an authenticated GitHub CLI (`gh auth login`) for the repository owner, and, for LLM agents, Hermes Agent (v0.22.5 used) and OpenClaw (2026.10.8 used) installed and configured with your own provider keys. Never commit keys.
 
 ```bash
-ssh -L <local-port>:127.0.0.1:<runtime-port> ubuntu@<public-ip>
+# 1. Lint and test exactly as CI does
+uv run --project app --extra dev ruff check app/
+uv run --project app --extra dev pytest app/tests/          # 70 passed, 1 skipped on 93dce88
+uv run --with pytest python -m pytest agents/dispatcher/tests -q   # 46 passed
+
+# 2. Run the app locally
+uv run --project app uvicorn newsroom.main:app --port 8000   # then open http://localhost:8000/
+
+# 3. Preview, then run, the dispatcher against the real GitHub queue
+bash agents/dispatcher/dispatch.sh --dry-run
+NEWSROOM_REVIEW_MODE=deterministic bash agents/dispatcher/dispatch.sh   # script Copydesk/Factcheck
+bash agents/dispatcher/dispatch.sh                                       # LLM Copydesk/Factcheck (needs Hermes/OpenClaw agents)
 ```
 
-Open `http://127.0.0.1:<local-port>` locally. Keep dashboard ports closed to public ingress.
+Agent setup: create the Hermes profiles `editor` and `copydesk` from [`agents/hermes/profiles/`](agents/hermes/profiles) and register the OpenClaw agents `reporter` and `factcheck` using [`agents/openclaw/README.md`](agents/openclaw/README.md) (merge entries from `agents.example.json`, do not overwrite an existing config). Point each agent's workspace and `cwd` at a checkout of this repository. Hermes `--usage-file` and OpenClaw session usage should be captured per run if you want token data (see the token report). On Windows run the dispatcher with the system Python, not a virtualenv's Python (section 6, item 4).
 
-## What I would improve
+### 8.2 Cloud path (not validated end to end)
 
-- Capture every agent's usage in the dispatcher at the end of each invocation (Hermes `--usage-file`; OpenClaw session usage), keyed by agent, ticket, attempt and model, instead of relying on agent estimates. Reconcile with provider dashboards.
-- Keep sanitized trace excerpts in the repository alongside the original GitHub links.
-- Verify the product on the VM after provisioning, including the actual HTTPS URL, timer state, and persisted SQLite data.
-- Dedupe is by URL (`articles.url UNIQUE`) and by normalized headline (`title_key` in `collector.py`, against the latest 2,000 stored titles); paraphrased stories from different outlets are not merged.
-- Give Copydesk a real criteria-reading review that still works when the free model is rate limited, rather than a mechanical fallback.
-- Keep stray files out of agent PRs (a path allowlist in `ci`).
+1. **Oracle path (not applied):** fill `infra/terraform.tfvars` from the example, pin an Ubuntu 24.04 aarch64 image OCID, then `terraform -chdir=infra init`, `validate`, `plan`, `apply` ([`infra/README.md`](infra/README.md)). Capacity may be unavailable (section 7).
+2. On any Ubuntu 24.04 VM: `sudo bash deploy/install.sh` installs Caddy, uvicorn and the refresh timer; put summarizer keys only in `/etc/newsroom.env`. This layout is what the GCP site follows, but the exact steps used on the GCP VM were not recorded.
+3. Agent side on a VM: `sudo bash agents/bootstrap.sh`, then authenticate `gh` and configure provider keys by hand, then install `agents/dispatcher/dispatcher.service` and `.timer`. See [`docs/DEPLOYMENT_RUNBOOK.md`](docs/DEPLOYMENT_RUNBOOK.md); its commands are marked unverified on a VM.
+
+---
+
+## 9. Limitations and next steps
+
+**Limitations.**
+- Unattended scheduling was not demonstrated: the validated cycle used manually started dispatcher ticks on a laptop, and the systemd timer was never shown running.
+- For PR #25, Copydesk and Factcheck were **scripts**. They check mechanics (one linked Issue, not a draft, no conflicts, green `ci`, ruff and pytest on the head). They do **not** check the acceptance criteria, UI behaviour or visual result, so the final PR's `review:approved` is not an LLM review.
+- The merged head `c892dd3` has no recorded agent review or test, and its agent trailers cannot be confirmed from runtime records.
+- Part of the final product (branding, PR #26) and the final PR #25 additions were human or Claude Code authored, not agent delivered.
+- The live site is not the latest `main`. No agent runtime or dispatcher runs on the VM. Oracle was never provisioned.
+- Dedupe is by URL and by normalised headline only; paraphrased stories from different outlets are not merged.
+- Token numbers are runtime-reported and incomplete (see the report); no billing was checked.
+
+**Next steps.**
+1. Redeploy the VM from `main` and record the VM type, region, refresh timer status and an `/runs` screenshot.
+2. Install the dispatcher timer on the VM and demonstrate one fully unattended ticket cycle.
+3. Give Copydesk a criteria-reading review that still works when the free model is rate-limited, instead of the mechanical fallback.
+4. Capture token usage in the dispatcher at the end of every invocation (Hermes `--usage-file`, OpenClaw session usage), keyed by agent, ticket, attempt and model.
+5. Add a path allowlist to `ci` so agent PRs cannot carry stray files, and have the dispatcher strip `agent:*` labels when a ticket closes.
+6. Repoint the reporter's `cwd` to a durable checkout.
+
+---
+
+## 10. Conclusion
+
+A working, publicly reachable AI-news site exists, and its first five tickets (T0–T4), an RSS fix and a CSS refactor were delivered by a Hermes and OpenClaw team through GitHub Issues and PRs, with real review rejections (T2, T3, PR #13), automatic retry routing, a rate-limit escalation and a label-based merge gate. The one fully traced dispatcher-driven cycle (Issue #14, PR #25, head `3f57733`) used an LLM reporter and script reviewers, with every dispatcher tick started by hand on the owner's laptop. What is not delivered is just as important: unattended scheduling, agents on the VM, an Oracle VM, agent validation of the final merged head, and a redeploy of the latest `main`. The token report documents what usage can and cannot be recovered.
