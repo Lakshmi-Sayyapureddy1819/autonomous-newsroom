@@ -34,6 +34,7 @@ jobs:
           LABELS=$(gh api "repos/${REPO}/issues/${PR_NUMBER}/labels" --jq '[.[].name]') || LABELS="[]"
           HAS_REVIEW=$(echo "$LABELS" | jq -r 'index("review:approved") != null')
           HAS_TEST=$(echo "$LABELS" | jq -r 'index("test:passed") != null')
+          HAS_CONFLICT=$(echo "$LABELS" | jq -r '(index("review:changes-requested") != null) or (index("test:failed") != null)')
 
-          echo "linked issues: ${LINKED:-unknown} | review:approved: ${HAS_REVIEW} | test:passed: ${HAS_TEST}"
-          bash .github/scripts/gate_decide.sh "${LINKED}" "${HAS_REVIEW}" "${HAS_TEST}"
+          echo "linked issues: ${LINKED:-unknown} | review:approved: ${HAS_REVIEW} | test:passed: ${HAS_TEST} | stale rejection: ${HAS_CONFLICT}"
+          bash .github/scripts/gate_decide.sh "${LINKED}" "${HAS_REVIEW}" "${HAS_TEST}" "${HAS_CONFLICT}"

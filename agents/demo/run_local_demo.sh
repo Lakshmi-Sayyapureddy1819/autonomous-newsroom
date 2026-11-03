@@ -1,17 +1,24 @@
 #!/usr/bin/env bash
-# Local interview demo: one ticket -> dispatcher wakes Reporter -> PR -> Copydesk -> Factcheck
-# -> gate green -> STOP (a human merges). This script NEVER merges and never edits labels
-# after the ticket is created; every transition is made by the dispatcher or an agent.
+# Local four-agent demo: a task goes to the Hermes EDITOR, which writes the Issue; then
+#   dispatcher -> OpenClaw REPORTER (PR) -> dispatcher -> Hermes COPYDESK (review)
+#   -> dispatcher -> OpenClaw FACTCHECK (tests the exact head) -> gate green -> STOP.
+# A human merges. This script NEVER merges and never edits labels or verdicts itself: every
+# transition is made by an agent or by the dispatcher, and every hand-off is validated against
+# GitHub (see agents/dispatcher/dispatch.py). All four agents are the REAL LLM agents; the
+# deterministic scripts are used only with --deterministic-review.
 #
-#   bash agents/demo/run_local_demo.sh [--yes] [--issue N] [--timeout MIN] [--poll SEC] [--preflight-only]
-#     --yes             create the ticket without the interactive confirmation
-#     --issue N         resume an existing demo ticket instead of creating one
+#   bash agents/demo/run_local_demo.sh [--yes] [--task TEXT] [--issue N] [--timeout MIN]
+#                                      [--poll SEC] [--preflight-only] [--deterministic-review]
+#     --yes             run without the interactive confirmation
+#     --task TEXT       the task for the Editor (default: add app/tests/test_demo_true.py)
+#     --issue N         resume an existing Editor-created ticket instead of submitting a task
 #     --timeout MIN     overall deadline (default 45)
 #     --preflight-only  run checks only; no GitHub writes, no agents
 set -uo pipefail
 
 REPO="${GITHUB_REPOSITORY:-Lakshmi-Sayyapureddy1819/autonomous-newsroom}"
-TIMEOUT_MIN=45; POLL=20; YES=0; ISSUE=""; PREFLIGHT_ONLY=0
+TIMEOUT_MIN=45; POLL=20; YES=0; ISSUE=""; PREFLIGHT_ONLY=0; DETERMINISTIC=0
+TASK="Add a new test file app/tests/test_demo_true.py containing a single test named test_true_is_true that asserts True is True. Do not modify any existing files."
 while [ $# -gt 0 ]; do
   case "$1" in
     --yes) YES=1 ;;
@@ -19,6 +26,8 @@ while [ $# -gt 0 ]; do
     --timeout) TIMEOUT_MIN="${2:?}"; shift ;;
     --poll) POLL="${2:?}"; shift ;;
     --preflight-only) PREFLIGHT_ONLY=1 ;;
+    --task) TASK="${2:?--task needs text}"; shift ;;
+    --deterministic-review) DETERMINISTIC=1 ;;
     *) echo "unknown option: $1" >&2; exit 64 ;;
   esac
   shift
@@ -82,7 +91,7 @@ bad()  { say "FAIL  $*"; fail=1; }
 [ -n "${BASH_VERSION:-}" ] && ok "bash ${BASH_VERSION%%(*} (Git Bash)" || bad "not running under bash"
 command -v git >/dev/null && ok "git" || bad "git missing"
 command -v uv >/dev/null && ok "uv $(uv --version | cut -d' ' -f2)" || bad "uv missing"
-PY="uv run --project $MAIN_REPO/app python"
+PY="${NEWSROOM_PYTHON:-uv run --no-project python}"
 $PY -c 'import sys; assert sys.version_info >= (3, 10)' >/dev/null 2>&1 \
   && ok "python via uv ($($PY -c 'import platform;print(platform.python_version())'))" \
   || bad "python 3.10+ not runnable through uv"
@@ -95,6 +104,15 @@ if command -v openclaw >/dev/null; then
 else
   bad "openclaw not on PATH"
 fi
+if command -v hermes >/dev/null; then
+  hp="$(hermes profile list 2>&1)"
+  for prof in editor copydesk; do
+    echo "$hp" | grep -Eq "^[^A-Za-z]*$prof[[:space:]]" && ok "hermes profile '$prof' exists" || bad "hermes has no '$prof' profile"
+  done
+else
+  bad "hermes not on PATH"
+fi
+command -v openclaw >/dev/null && { echo "$oc" | grep -q '^- factcheck' && ok "openclaw agent 'factcheck' registered" || bad "openclaw has no 'factcheck' agent"; }
 for l in status:ready agent:reporter attempt:1 status:ready-to-merge review:approved test:passed; do
   gh_ label list --limit 100 --json name --jq '.[].name' 2>/dev/null | grep -qx "$l" || bad "repo label missing: $l"
 done
@@ -121,61 +139,42 @@ WT="$RUN/repo"
 git -C "$MAIN_REPO" worktree add --detach "$WT" origin/main >/dev/null 2>&1 \
   && ok "clean checkout of origin/main at $WT" || report_failure "could not create worktree"
 
-# ---------------------------------------------------------------- 2. create the ticket
-step "2/5 Demo ticket"
+# ---------------------------------------------------------------- 2. Hermes Editor writes the ticket
+step "2/5 Task -> Hermes Editor -> GitHub Issue"
+export NEWSROOM_DISPATCH_STATE_DIR="$RUN/state"    # fresh retry budget, isolated from other runs
+export NEWSROOM_REPO_DIR="$WT"                     # agents work ONLY in this clean checkout
+export GITHUB_REPOSITORY="$REPO"
+export PYTHONUNBUFFERED=1
+[ "$DETERMINISTIC" -eq 1 ] && export NEWSROOM_REVIEW_MODE=deterministic || unset NEWSROOM_REVIEW_MODE
+# The dispatcher code under test is THIS checkout; only the agents' work tree is origin/main.
+DISPATCH="$MAIN_REPO/agents/dispatcher"
+EDITOR_LOG="$RUN/editor.log"
 if [ -z "$ISSUE" ]; then
-  TITLE="Demo: add regression tests for strip_source_suffix"
-  BODY="$(cat <<'EOF'
-## Goal
-`strip_source_suffix` in `app/newsroom/main.py` has no direct tests. Add a small, focused regression test module that pins its behaviour.
-
-## Acceptance criteria
-- [ ] Exactly one new file is added: `app/tests/test_strip_source_suffix.py`. No other file changes.
-- [ ] A test shows `strip_source_suffix("Headline - Reuters", "Reuters") == "Headline"`.
-- [ ] A test shows a title whose suffix names a different source is returned unchanged.
-- [ ] A test shows a title that is only the suffix (`" - Reuters"`) is returned unchanged.
-- [ ] A test shows an empty `source` returns the title unchanged.
-- [ ] `uv run --project app --extra dev pytest app/tests/test_strip_source_suffix.py` passes and `ruff check app/` is clean.
-- [ ] The PR body contains `Closes #<this issue>`; commits carry the five trailers from `agents/PROTOCOL.md`.
-
-## Out of scope
-Any change to `app/newsroom/**`, templates, CSS/branding, `deploy/`, `agents/`, or workflows.
-
-## Depends on
-none
-EOF
-)"
-  say "About to create a LIVE GitHub Issue in $REPO:"
-  say "  title : $TITLE"
-  say "  labels: status:ready, agent:reporter, attempt:1  (this is what wakes the Reporter)"
+  say "Task for the Editor: $TASK"
+  say "The Hermes Editor will create ONE LIVE GitHub Issue in $REPO labelled"
+  say "  status:ready, agent:reporter, attempt:1  (this is what wakes the Reporter)"
   if [ "$YES" -ne 1 ]; then
     read -r -p "Type CREATE to proceed: " ans </dev/tty
     [ "$ans" = "CREATE" ] || { echo "Aborted; nothing created."; exit 1; }
   fi
-  url="$(gh_ issue create --title "$TITLE" --body "$BODY" \
-        --label status:ready --label agent:reporter --label attempt:1 2>&1)" \
-    || report_failure "issue creation failed: $(echo "$url" | redact)"
-  ISSUE="${url##*/}"
-  say "created Issue #$ISSUE  $url"
+  $PY "$DISPATCH/submit_task.py" "$TASK" 2>&1 | redact | tee "$EDITOR_LOG"
+  [ "${PIPESTATUS[0]}" -eq 0 ] || report_failure "the Editor did not produce a valid Issue (see above; nothing was resent)"
+  ISSUE="$(sed -n 's/^ISSUE=//p' "$EDITOR_LOG" | tail -1)"
+  say "Editor created Issue #$ISSUE"
 fi
 case "$ISSUE" in ''|*[!0-9]*) report_failure "bad issue number '$ISSUE'" ;; esac
 
 # ---------------------------------------------------------------- 3. dispatcher loop
 step "3/5 Dispatcher loop (timeout ${TIMEOUT_MIN} min, poll ${POLL}s)"
-export NEWSROOM_REVIEW_MODE=deterministic          # Copydesk + Factcheck: scripts, no LLM
-export NEWSROOM_DISPATCH_STATE_DIR="$RUN/state"    # fresh retry budget, isolated from other runs
-export NEWSROOM_REPO_DIR="$WT"
-export GITHUB_REPOSITORY="$REPO"
-export PYTHONUNBUFFERED=1
-
 tick() {
   TICK_N=$((TICK_N + 1)); local out="$RUN/tick-$TICK_N.log"
   say ">>> dispatcher tick #$TICK_N"
-  $PY "$WT/agents/dispatcher/dispatch.py" 2>&1 | redact | tee "$out"
+  $PY "$DISPATCH/dispatch.py" 2>&1 | redact | tee "$out"
   local rc=${PIPESTATUS[0]}
   [ "$rc" -ne 0 ] && report_failure "dispatcher exited $rc (see tick log)"
   grep -q "escalating" "$out" && report_failure "dispatcher escalated the ticket to the human"
-  grep -q "malformed labels" "$out" && report_failure "dispatcher skipped the ticket: malformed labels (an agent left conflicting status/agent labels); human decision needed"
+  grep -q "malformed labels persisted" "$out" && report_failure "labels stayed inconsistent; the dispatcher blocked the ticket for the human"
+  grep -q "failure [0-9]/3" "$out" && say "an invocation failed validation (the dispatcher retries up to 3 times, then escalates)"
   if grep -q "Nothing to dispatch" "$out"; then
     IDLE=$((IDLE + 1)); [ "$IDLE" -ge 3 ] && report_failure "3 consecutive ticks woke nobody although the ticket looked actionable"
   else IDLE=0; fi
@@ -228,6 +227,20 @@ PR="${INFO%%|*}"; rest="${INFO#*|}"; PRL="${rest%|*}"
 has "$PRL" review:approved && has "$PRL" test:passed || report_failure "PR #$PR lacks review:approved and/or test:passed (labels: $PRL)"
 say "Issue #$ISSUE labels: $L"
 say "PR    #$PR labels: $PRL"
+# Proof from the logs that every agent was actually invoked and left a VALID hand-off.
+if [ -n "${EDITOR_LOG:-}" ] && grep -q "^Editor created Issue #$ISSUE" "$EDITOR_LOG" 2>/dev/null; then
+  say "evidence: Hermes Editor was invoked and created Issue #$ISSUE (validated by submit_task.py)"
+else
+  say "note: no Editor log for Issue #$ISSUE in this run (resumed with --issue?)"
+fi
+for ag in reporter copydesk factcheck; do
+  if grep -qh "Waking $ag for issue-$ISSUE" "$RUN"/tick-*.log 2>/dev/null \
+     && grep -qh "issue-$ISSUE: $ag finished and the hand-off is valid" "$RUN"/tick-*.log 2>/dev/null; then
+    say "evidence: $ag was woken by the dispatcher and left a valid hand-off"
+  else
+    report_failure "no log evidence that $ag was invoked and handed off validly"
+  fi
+done
 gate_deadline=$((SECONDS + 180)); gate=""
 while [ "$SECONDS" -lt "$gate_deadline" ]; do
   gate="$(gh_ pr view "$PR" --json statusCheckRollup --jq '[.statusCheckRollup[]?|select(.name=="gate")|.conclusion]|last // "pending"' 2>/dev/null)"
