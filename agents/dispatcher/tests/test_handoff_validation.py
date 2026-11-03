@@ -384,7 +384,8 @@ def test_timeout_keeps_the_lock_so_no_duplicate_invocation_starts(tmp_path):
     clock = Clock()
     d = make(tmp_path, repo, runner, clock)
     d.tick()
-    assert calls == ["reporter"] and failures(d) == 1
+    assert calls == ["reporter"] and failures(d) == 0, "uncertain, not yet a failure"
+    assert d.state.load("issue-1")["uncertain"]["agent"] == "reporter"
     # a fresh dispatcher process (next timer tick) must not start a second Reporter yet
     make(tmp_path, repo, runner, clock).tick()
     assert calls == ["reporter"]
@@ -481,3 +482,132 @@ def test_unicode_agent_output_cannot_crash_a_cp1252_console():
     finally:
         sys.stdout = old
     assert "rate limited".encode() in raw.getvalue()
+
+
+# ---- live run 2 (2026-11-03 22:33): lost Hermes gateway -> duplicate Copydesk; gh blips ----------
+GATEWAY_LOST = ("Gateway disconnected; turn outcome is unknown. Resume the printed session ID to "
+                "check whether it completed or was interrupted; do not resend the work.")
+
+
+def review_ticket_repo():
+    repo = Repo(["status:in-review", "agent:copydesk", "attempt:1"])
+    repo.open_pr()
+    return repo
+
+
+def test_gateway_loss_does_not_start_a_duplicate_copydesk_and_is_confirmed_later(tmp_path):
+    """The real bug: CLI exited 1 'turn outcome is unknown' while the Hermes turn kept running and
+    approved the PR minutes later; the dispatcher woke Copydesk a second time (duplicate review)."""
+    repo = review_ticket_repo()
+    calls = []
+
+    def runner(agent, issue_no, prompt, pr=""):
+        calls.append(agent)
+        return 1, GATEWAY_LOST
+
+    clock = Clock()
+    d = make(tmp_path, repo, runner, clock)
+    d.tick()
+    assert calls == ["copydesk"] and failures(d) == 0
+    for _ in range(4):  # the turn is still running server-side: nothing is re-woken
+        clock.t += 30
+        d.tick()
+    assert calls == ["copydesk"], "no second invocation while the outcome is unknown"
+    good_copydesk(repo)  # the gateway session finishes the review on its own
+    clock.t += 30
+    d.tick()
+    assert calls == ["copydesk"] and failures(d) == 0
+    assert "uncertain" not in d.state.load("issue-1")
+    clock.t += 30
+    d.tick()  # now the ticket moves on: Factcheck, not Copydesk again
+    assert calls == ["copydesk", "factcheck"], "the ticket moved on; Copydesk never ran twice"
+    assert repo.issue() >= {"status:in-test", "agent:factcheck"}
+
+
+def test_uncertain_outcome_that_never_appears_becomes_one_failure_after_the_window(tmp_path):
+    repo = review_ticket_repo()
+    calls = []
+
+    def runner(agent, issue_no, prompt, pr=""):
+        calls.append(agent)
+        return 1, GATEWAY_LOST
+
+    clock = Clock()
+    d = make(tmp_path, repo, runner, clock, NEWSROOM_SETTLE_SECONDS="300")
+    d.tick()
+    clock.t += 301
+    d.tick()  # window over: counted as a failure (retry allowed from the next tick)
+    assert failures(d) == 1 and "never appeared" in d.state.load("issue-1")["last_error"]
+    assert len(calls) == 1, "the kept lock still blocks a retry until it expires"
+    (d.state.dir / "locks" / "copydesk.lock").unlink()  # real time passes in production
+    d.tick()
+    assert len(calls) == 2, "a bounded retry, not a loop"
+
+
+def test_unreadable_github_after_a_run_is_uncertain_not_a_crash(tmp_path):
+    repo = Repo()
+
+    class Flaky(Repo):
+        down = False
+
+        def open_prs(self):
+            if self.down:
+                raise RuntimeError("gh pr list failed: TLS handshake timeout")
+            return super().open_prs()
+
+    repo = Flaky()
+
+    def runner(agent, issue_no, prompt, pr=""):
+        good_reporter(repo)
+        repo.down = True  # GitHub becomes unreachable right after the agent finishes
+        return 0, "ok"
+
+    clock = Clock()
+    d = make(tmp_path, repo, runner, clock)
+    d.tick()
+    assert failures(d) == 0 and d.state.load("issue-1")["uncertain"]["agent"] == "reporter"
+    repo.down = False
+    clock.t += 30
+    d.tick()
+    assert "uncertain" not in d.state.load("issue-1") and failures(d) == 0
+    assert repo.issue() >= {"status:in-review", "agent:copydesk"}
+
+
+def test_gh_retries_network_blips_but_not_real_errors_or_creates(monkeypatch):
+    seq = []
+
+    def fake_run(cmd, **kw):
+        seq.append(cmd)
+        blip = len([c for c in seq if c == cmd]) < 3
+        return subprocess.CompletedProcess(
+            cmd, 1 if blip else 0, "[]", 'Post "https://api.github.com/graphql": TLS handshake timeout'
+            if blip else "")
+
+    monkeypatch.setattr(dispatch.subprocess, "run", fake_run)
+    monkeypatch.setattr(dispatch.time, "sleep", lambda s: None)
+    assert dispatch.GitHub("o/r").issues("open") == []
+    assert len(seq) == 3, "two blips then success"
+
+    seq.clear()
+    monkeypatch.setattr(dispatch.subprocess, "run",
+                        lambda cmd, **kw: (seq.append(cmd), subprocess.CompletedProcess(
+                            cmd, 1, "", "HTTP 422: Validation Failed"))[1])
+    with pytest.raises(RuntimeError):
+        dispatch.GitHub("o/r").issues("open")
+    assert len(seq) == 1, "a real error is not retried"
+
+    seq.clear()
+    monkeypatch.setattr(dispatch.subprocess, "run",
+                        lambda cmd, **kw: (seq.append(cmd), subprocess.CompletedProcess(
+                            cmd, 1, "", "TLS handshake timeout"))[1])
+    with pytest.raises(RuntimeError):
+        dispatch.GitHub("o/r").create_issue("t", "b", [])
+    assert len(seq) == 1, "creating is never retried (it could be created twice)"
+
+
+def test_factcheck_prompt_pins_repo_and_checkout_not_the_agent_workspace(tmp_path):
+    """Live: Factcheck used its OpenClaw workspace whose remote is openclaw/factcheck.git."""
+    t = dispatch.parse_ticket(Repo()._issue(), set())
+    p = dispatch.prompt_for("factcheck", 35, t, tmp_path, "36", "owner/repo")
+    assert "--repo owner/repo" in p and "git -C" in p and "own agent workspace" in p
+    assert "pull/36/head" in p and "headRefOid" in p

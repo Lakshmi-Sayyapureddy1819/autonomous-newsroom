@@ -23,6 +23,7 @@ Environment (all optional):
   default is the LLM agents), NEWSROOM_AGENT_TIMEOUT (s, default 900), NEWSROOM_MAX_TURNS (default 40),
   NEWSROOM_RETRY_BACKOFF (s, default 60), NEWSROOM_STALE_MINUTES (default 45),
   NEWSROOM_MALFORMED_GRACE (s, default 120), NEWSROOM_MAX_WAKES (default 9),
+  NEWSROOM_SETTLE_SECONDS (s an uncertain agent outcome is awaited before a retry, default 600),
   NEWSROOM_EXTRA_ARGS_<AGENT> (shell-style args appended to that agent's command, e.g. a
   per-run model override: NEWSROOM_EXTRA_ARGS_COPYDESK="-m gemini-2.5-flash --provider gemini";
   OpenClaw: NEWSROOM_EXTRA_ARGS_FACTCHECK="--model google/gemini-2.5-flash"). Off by default.
@@ -63,6 +64,13 @@ HANDOFF_TO = {
     "reporter": ("status:in-review", "agent:copydesk"),
     "copydesk": ("status:in-test", "agent:factcheck"),
 }
+# An agent run whose outcome cannot be read from its exit code: a timeout, or Hermes losing its
+# gateway ("Gateway disconnected; turn outcome is unknown ... do not resend the work").
+UNCERTAIN = re.compile(r"turn outcome is unknown|Gateway disconnected|keepalive ping timeout|"
+                       r"ConnectionClosed|outcome uncertain", re.IGNORECASE)
+TRANSIENT_GH = re.compile(r"TLS handshake timeout|EOF|connection reset|timed? ?out|"
+                          r"temporarily unavailable|HTTP 50[234]|no such host|dial tcp",
+                          re.IGNORECASE)
 SECRET = re.compile(r"(ghp_|gho_|github_pat_|sk-|AIza)[A-Za-z0-9_\-]{8,}")
 
 
@@ -86,6 +94,7 @@ class Config:
         self.deterministic = env.get("NEWSROOM_REVIEW_MODE", "").lower() == "deterministic"
         self.malformed_grace = int(env.get("NEWSROOM_MALFORMED_GRACE", "120"))
         self.max_wakes = int(env.get("NEWSROOM_MAX_WAKES", "9"))
+        self.settle = int(env.get("NEWSROOM_SETTLE_SECONDS", "600"))
         self.env = env
 
     def needs_pr(self, agent: str) -> bool:
@@ -122,11 +131,17 @@ class GitHub:
         self.repo = repo
 
     def _gh(self, *args: str, stdin: str | None = None) -> str:
-        out = subprocess.run(["gh", *args, "--repo", self.repo], input=stdin, text=True,
-                             capture_output=True, timeout=120)
-        if out.returncode:
-            raise RuntimeError(f"gh {' '.join(args[:2])} failed: {sanitize(out.stderr)}")
-        return out.stdout
+        for attempt in range(4):
+            out = subprocess.run(["gh", *args, "--repo", self.repo], input=stdin, text=True,
+                                 capture_output=True, timeout=120, check=False,
+                                 encoding="utf-8", errors="replace")
+            if not out.returncode:
+                return out.stdout
+            # Network blips only; never retry creating something (it could be created twice).
+            if attempt == 3 or not TRANSIENT_GH.search(out.stderr or "") or args[1:2] == ("create",):
+                break
+            time.sleep(2 * (attempt + 1))
+        raise RuntimeError(f"gh {' '.join(args[:2])} failed: {sanitize(out.stderr)}")
 
     def issues(self, state: str) -> list[dict]:
         return json.loads(self._gh("issue", "list", "--state", state, "--limit", "200",
@@ -278,7 +293,8 @@ ROLE_RULES = {
     ),
     "factcheck": (
         "Test PR #{pr}. Fetch and check out its EXACT head SHA in the checkout named above "
-        "(`gh pr checkout {pr} --detach` or `git fetch origin pull/{pr}/head`), record the SHA, "
+        "(`git -C <checkout> fetch origin pull/{pr}/head` then `git -C <checkout> checkout "
+        "--detach FETCH_HEAD`; it must equal `gh pr view {pr} --json headRefOid`), record the SHA, "
         "run `ruff check app/` and the pytest suite, and verify each acceptance criterion by "
         "command. Post the commands, output and SHA as a PR comment. If everything passes and "
         "the PR head is still that SHA: add test:passed to the PR; on the ISSUE add "
@@ -290,7 +306,7 @@ ROLE_RULES = {
 
 
 def prompt_for(agent: str, number: int, t: lifecycle.Ticket | None, root: Path | None = None,
-               pr: str = "") -> str:
+               pr: str = "", repo: str = "") -> str:
     if agent == "editor":
         return (
             "You are the editor. Read agents/PROTOCOL.md and docs/brief.md. The repository has "
@@ -301,8 +317,16 @@ def prompt_for(agent: str, number: int, t: lifecycle.Ticket | None, root: Path |
             "status label; the dispatcher promotes it when its dependencies are merged. Do not "
             "edit app/ or deploy/. Finish with a handoff comment on the first ticket."
         )
-    where = (f" Your repository checkout is {root} (clean). Do ALL git and file work there and "
-             "in no other checkout." if root else "")
+    if root and repo:
+        where = (f" Repository: {repo}. Your clean checkout is {root}. Do ALL git and file work "
+                 f"there: run git as `git -C \"{root}\" ...` and never use the git remote or the "
+                 "files of your own agent workspace (it is a different repository). Run every "
+                 f"gh command with `--repo {repo}`.")
+    elif root:
+        where = (f" Your repository checkout is {root} (clean). Do ALL git and file work there "
+                 "and in no other checkout.")
+    else:
+        where = ""
     pr_note = f" The linked PR is #{pr}." if pr else ""
     rules = ROLE_RULES.get(agent, "").format(n=number, pr=pr or "?")
     return (
@@ -375,6 +399,8 @@ class Dispatcher:
             status, agent = t.with_prefix("status:"), t.with_prefix("agent:")
             if status == ["status:blocked"]:
                 self.state.clear(f"issue-{t.number}-wakes")  # a human owns it now
+            if self._settle(t):
+                continue
             problem = label_problem(t)
             if problem:
                 self._malformed(t, problem)
@@ -454,20 +480,34 @@ class Dispatcher:
                 before = self._snapshot(number, pr)
                 before["labels"] = sorted(t.with_prefix("status:") + t.with_prefix("agent:"))
             if code is None:
-                prompt = prompt_for(agent, number, t, self.cfg.root, extra.get("pr", ""))
+                prompt = prompt_for(agent, number, t, self.cfg.root, extra.get("pr", ""),
+                                    self.cfg.repo)
                 code, output = self.run_agent(agent, str(number), prompt, **extra)
                 self.state.save(wakes_key, {"count": wakes + 1})
-                if code == 124:  # uncertain: it may still be running somewhere
-                    lock.keep(self.cfg.timeout)
             st["last_attempt"] = self.now()
             st["rate_limited"] = bool(re.search(r"\b(402|429)\b", output))
             never_started = not before and t and code is not None and code != 0
+            uncertain = code == 124 or bool(UNCERTAIN.search(output))
             if never_started:
                 problem = output  # no PR / dirty checkout: the agent was not started
             elif t:
-                problem = self._evaluate(agent, number, before)  # re-read GitHub; may repair
+                try:  # re-read GitHub; may repair
+                    problem = self._evaluate(agent, number, before)
+                except RuntimeError as exc:
+                    problem, uncertain = f"could not read GitHub: {sanitize(str(exc), 120)}", True
             else:  # editor bootstrap: judged by what exists on GitHub, not by the exit code
                 problem = "" if self.gh.issues("open") else "editor created no ticket"
+            if problem and uncertain and t and not never_started:
+                # The agent may still be running (a lost Hermes gateway keeps the turn alive) or
+                # GitHub was unreadable: do NOT start a second invocation, wait for GitHub to
+                # show the outcome (see _settle), and only then count a failure.
+                st["uncertain"] = {"agent": agent, "sig": sig, "before": before,
+                                   "until": self.now() + self.cfg.settle, "why": problem}
+                lock.keep(self.cfg.settle)
+                self.log(f"{key}: {agent} outcome uncertain ({problem[:100]}); waiting up to "
+                         f"{self.cfg.settle}s for GitHub to show it; NOT re-running")
+                self.state.save(key, st)
+                return
             if not problem:
                 if code:
                     self.log(f"{key}: {agent} exited {code} but left a valid hand-off on "
@@ -485,6 +525,35 @@ class Dispatcher:
             self.state.save(key, st)
         finally:
             lock.release()
+
+    def _settle(self, t: lifecycle.Ticket) -> bool:
+        """Resolve an uncertain agent outcome from GitHub. True = handled/waiting this tick."""
+        key = f"issue-{t.number}"
+        st = self.state.load(key)
+        unc = st.get("uncertain")
+        if not unc:
+            return False
+        try:
+            problem = self._evaluate(unc["agent"], t.number, unc["before"])
+        except RuntimeError as exc:
+            problem = f"could not read GitHub: {sanitize(str(exc), 120)}"
+        if not problem:
+            self.log(f"{key}: {unc['agent']} finished and the hand-off is valid "
+                     "(outcome confirmed on GitHub after an uncertain exit; not re-running)")
+            self.state.save(key, {"signature": unc["sig"], "failures": 0, "last_ok": self.now()})
+            return True
+        if self.now() < unc["until"]:
+            self.log(f"{key}: waiting for the uncertain {unc['agent']} outcome ({problem[:100]})")
+            return True
+        st.pop("uncertain")
+        st["failures"] = st.get("failures", 0) + 1
+        st["last_error"] = sanitize(f"{unc['agent']} outcome never appeared on GitHub: {problem}")
+        self.log(f"{key}: failure {st['failures']}/{MAX_FAILURES}: {st['last_error'][:160]}")
+        if st["failures"] >= MAX_FAILURES:
+            self._escalate(unc["agent"], key, t.number, st)
+        else:
+            self.state.save(key, st)
+        return False
 
     # ---- hand-off validation -------------------------------------------------------
     @staticmethod
