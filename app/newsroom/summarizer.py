@@ -16,6 +16,7 @@ import httpx
 
 from newsroom.db import get_connection
 from newsroom.env import load_env
+from newsroom.sanitize import sanitize_error
 
 logger = logging.getLogger(__name__)
 
@@ -303,7 +304,7 @@ def record_run(
             INSERT INTO runs (started_at, finished_at, status, fetched, inserted, summarized, error)
             VALUES (?, ?, ?, ?, ?, ?, ?);
             """,
-            (started_at, finished_at, status, fetched, 0, summarized, error),
+            (started_at, finished_at, status, fetched, 0, summarized, sanitize_error(error)),
         )
         return cursor.lastrowid
 

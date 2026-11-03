@@ -765,8 +765,13 @@ def main(argv=None) -> int:
     utf8_stdio()
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     ap.add_argument("--dry-run", action="store_true", help="show actions, change nothing")
+    ap.add_argument("--refresh", action="store_true",
+                    help="run the product refresh job (collector then summarizer) instead of a tick")
     args = ap.parse_args(argv)
     cfg = Config()
+    if args.refresh:
+        import refresh_job  # noqa: PLC0415 - only needed for this mode
+        return refresh_job.RefreshJob(cfg, GitHub(cfg.repo)).run()
     if not args.dry_run and not shutil.which("gh"):
         print("Required command not found: gh", file=sys.stderr)
         return 1
