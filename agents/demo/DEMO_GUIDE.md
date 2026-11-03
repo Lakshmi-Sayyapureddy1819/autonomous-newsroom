@@ -3,7 +3,7 @@
 ## Start (Git Bash, repo root, ~10–25 min live)
 ```bash
 cd /c/Users/Yasaswini/autonomous-newsroom
-git checkout main && git pull            # must contain origin/main
+git checkout main && git pull            # once the demo PR is merged; until then: git checkout demo/e2e-local-demo
 bash agents/demo/run_local_demo.sh --preflight-only   # safe: no GitHub writes
 bash agents/demo/run_local_demo.sh                    # asks you to type CREATE, then runs hands-off
 ```
