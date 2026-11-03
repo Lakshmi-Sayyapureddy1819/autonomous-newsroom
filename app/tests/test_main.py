@@ -8,7 +8,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from newsroom.db import get_connection, init_db
-from newsroom.main import app
+from newsroom.main import SITE_NAME, SITE_TAGLINE, app, strip_source_suffix
 
 
 @pytest.fixture()
@@ -334,8 +334,6 @@ def test_rss_feed_channel_link_uses_request_base_url(client: TestClient) -> None
 
 
 def test_brand_name_and_tagline_appear_everywhere(client: TestClient) -> None:
-    from newsroom.main import SITE_NAME, SITE_TAGLINE
-
     for path in ("/", "/runs", "/no-such-page"):
         text = client.get(path, headers={"accept": "text/html"}).text
         assert "<title>" in text and SITE_NAME in text, path
@@ -344,8 +342,6 @@ def test_brand_name_and_tagline_appear_everywhere(client: TestClient) -> None:
 
 
 def test_rss_channel_uses_brand_name(client: TestClient) -> None:
-    from newsroom.main import SITE_NAME
-
     text = client.get("/rss.xml").text
     assert f"<title>{SITE_NAME}</title>" in text
     assert "Autonomous Newsroom" not in text
@@ -363,3 +359,29 @@ def test_synapse_logo_assets_are_served_and_linked(client: TestClient) -> None:
         response = client.get(f"/static/brand/{name}")
         assert response.status_code == 200, name
         assert len(response.content) > 0, name
+
+def test_strip_source_suffix_regression() -> None:
+    # Test cases where the suffix should be stripped
+    assert strip_source_suffix("Headline - Source", "Source") == "Headline"
+    assert strip_source_suffix(
+        "Another Headline - Another Source", "Another Source") == "Another Headline"
+    assert strip_source_suffix(
+        "Long Headline Text - My News Source", "My News Source") == "Long Headline Text"
+
+    # Test cases where the suffix should NOT be stripped
+    # (no suffix, different suffix, source not matching suffix)
+    assert strip_source_suffix(
+        "Headline with no suffix", "Source") == "Headline with no suffix"
+    assert strip_source_suffix(
+        "Headline - Other Source", "My Source") == "Headline - Other Source"
+    assert strip_source_suffix("Headline - Source X", "Source Y") == "Headline - Source X"
+    assert strip_source_suffix("Short - S", "S") == "Short"  # Very short title/source
+    assert strip_source_suffix("Source", "Source") == "Source"  # Title is just source
+
+    # Test with empty source
+    assert strip_source_suffix("Headline - ", "") == "Headline - "
+    assert strip_source_suffix("Headline", "") == "Headline"
+
+    # Test with None source
+    assert strip_source_suffix("Headline - Source", None) == "Headline - Source"
+    assert strip_source_suffix("Headline", None) == "Headline"
