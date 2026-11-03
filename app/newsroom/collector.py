@@ -18,6 +18,7 @@ import httpx
 
 from newsroom.db import get_connection
 from newsroom.env import load_env
+from newsroom.sanitize import sanitize_error
 
 DEFAULT_FEED_URL = (
     "https://news.google.com/rss/search?q=artificial+intelligence&hl=en-US&gl=US&ceid=US:en"
@@ -261,9 +262,17 @@ def record_run(
             INSERT INTO runs (started_at, finished_at, status, fetched, inserted, summarized, error)
             VALUES (?, ?, ?, ?, ?, ?, ?);
             """,
-            (started_at, finished_at, status, fetched, inserted, 0, error),
+            (started_at, finished_at, status, fetched, inserted, 0, sanitize_error(error)),
         )
         return cursor.lastrowid
+
+
+def get_feed_urls() -> list[str]:
+    """All RSS feed URLs: NEWSROOM_FEED_URLS (comma/space/newline separated), else the single
+    NEWSROOM_FEED_URL / default. Duplicates are dropped, order is kept."""
+    raw = os.environ.get("NEWSROOM_FEED_URLS", "")
+    urls = [u for u in re.split(r"[,\s]+", raw) if u.startswith(("http://", "https://"))]
+    return list(dict.fromkeys(urls)) or [get_feed_url()]
 
 
 def collect(
@@ -348,13 +357,15 @@ def main() -> None:
     """CLI entrypoint for collector."""
     load_env()
     logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
-    feed_url = get_feed_url()
-    print(f"Starting collector run for: {feed_url}")
-    result = collect(feed_url)
-    print(
-        f"Collector completed with status='{result.status}': "
-        f"fetched={result.fetched}, inserted={result.inserted}, error={result.error}"
-    )
+    results = []
+    for feed_url in get_feed_urls():  # one failing feed must not stop the others
+        print(f"Starting collector run for: {feed_url}")
+        result = collect(feed_url)
+        results.append(result)
+        print(
+            f"Collector completed with status='{result.status}': "
+            f"fetched={result.fetched}, inserted={result.inserted}, error={result.error}"
+        )
     from newsroom.hackernews import collect_hacker_news, hn_enabled
 
     if hn_enabled():
@@ -363,7 +374,7 @@ def main() -> None:
             f"Hacker News completed with status='{hn.status}': "
             f"fetched={hn.fetched}, inserted={hn.inserted}, error={hn.error}"
         )
-    if result.status == "failed":
+    if all(r.status == "failed" for r in results):
         sys.exit(1)
 
 
