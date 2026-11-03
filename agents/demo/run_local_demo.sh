@@ -120,7 +120,8 @@ git -C "$MAIN_REPO" fetch origin --quiet && ok "fetched origin" || bad "git fetc
 git -C "$MAIN_REPO" merge-base --is-ancestor origin/main HEAD \
   && ok "this checkout contains origin/main ($(git -C "$MAIN_REPO" rev-parse --short origin/main))" \
   || bad "this checkout is behind origin/main; run: git pull"
-open_prs="$(gh_ pr list --state open --json number --jq 'length' 2>/dev/null)"
+# When resuming (--issue N) the ticket's own PR is expected; only OTHER open PRs are a problem.
+open_prs="$(gh_ pr list --state open --json number,closingIssuesReferences --jq '[.[]|select(all(.closingIssuesReferences[]?; .number != '"${ISSUE:-0}"'))]|length' 2>/dev/null)"
 [ "${open_prs:-x}" = "0" ] && ok "no other open PRs" || bad "open PRs exist (${open_prs:-?}); the demo needs a quiet pipeline"
 active="$(gh_ issue list --state open --json number,labels --jq '[.[]|select(any(.labels[].name; test("^status:(ready|in-progress|in-review|in-test)$")))]|map("#\(.number)")|join(" ")' 2>/dev/null)"
 if [ -n "$ISSUE" ]; then ok "resuming ticket #$ISSUE"; elif [ -z "$active" ]; then ok "no other active ticket in the pipeline"; else bad "other tickets already active: $active"; fi
