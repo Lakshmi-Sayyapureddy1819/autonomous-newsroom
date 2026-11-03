@@ -30,7 +30,7 @@ STATE_ROOT="$HOME/.local/state/newsroom-demo"
 RUN="$STATE_ROOT/run-$(date +%Y%m%d-%H%M%S)"
 LOCK="$STATE_ROOT/demo.lock"
 DEADLINE=$((SECONDS + TIMEOUT_MIN * 60))
-WT=""; PR=""; TICK_N=0
+WT=""; PR=""; TICK_N=0; IDLE=0
 
 # Never print tokens: mask anything that looks like a credential in all output we relay.
 redact() { sed -E 's/(ghp_|github_pat_|sk-|AIza|gho_)[A-Za-z0-9_-]{8,}/[redacted]/g'; }
@@ -175,6 +175,11 @@ tick() {
   local rc=${PIPESTATUS[0]}
   [ "$rc" -ne 0 ] && report_failure "dispatcher exited $rc (see tick log)"
   grep -q "escalating" "$out" && report_failure "dispatcher escalated the ticket to the human"
+  grep -q "malformed labels" "$out" && report_failure "dispatcher skipped the ticket: malformed labels (an agent left conflicting status/agent labels); human decision needed"
+  if grep -q "Nothing to dispatch" "$out"; then
+    IDLE=$((IDLE + 1)); [ "$IDLE" -ge 3 ] && report_failure "3 consecutive ticks woke nobody although the ticket looked actionable"
+  else IDLE=0; fi
+  sleep 5
   return 0
 }
 

@@ -45,3 +45,6 @@ Copydesk counts a pending/missing `ci` as a failed attempt (3 → escalation), s
 - Reporter is an LLM (gemini-2.5-flash via OpenClaw): it can be slow or fail; the dispatcher retries/escalates, and the script then prints the Issue, PR, labels and latest logs.
 - Copydesk/Factcheck run in deterministic mode (no LLM review of acceptance-criteria prose); Factcheck re-runs ruff/pytest, it does not verify each criterion semantically.
 - The earlier Issue #14 / PR #25 cycle needed human relabeling and a cleanup request, so it is **not** evidence of a hands-off run.
+
+## Live-run result (2026-11-03, Issue #29 / PR #30) – NOT a pass
+The dispatcher woke Reporter, which opened PR #30 (ci green). Reporter then left Issue #29 with two `status:*` labels and put the hand-off labels on the PR instead of the Issue. The dispatcher refused to act on the malformed ticket ("malformed labels; skipped"), so Copydesk and Factcheck never ran. The full hands-off cycle is therefore **not validated live**; it is validated only offline (`test_e2e_state_machine.py`). The demo script now stops on malformed labels instead of looping.
