@@ -25,6 +25,7 @@ from __future__ import annotations
 import argparse
 import os
 import re
+import shlex
 import shutil
 import subprocess
 import sys
@@ -100,6 +101,7 @@ def run_editor(cfg: dispatch.Config, task: str, timeout: int) -> tuple[int, str]
         fh.write(editor_prompt(task, cfg.repo))
     argv = [shutil.which("hermes") or "hermes", "-p", "editor", "chat", "--query-file", fh.name,
             "--oneshot", "--max-turns", str(cfg.max_turns)]
+    argv += shlex.split(cfg.env.get("NEWSROOM_EXTRA_ARGS_EDITOR", ""))
     group = ({"creationflags": subprocess.CREATE_NEW_PROCESS_GROUP} if os.name == "nt"
              else {"start_new_session": True})
     try:
@@ -157,6 +159,7 @@ def submit(gh, task: str, editor, *, allow_duplicate: bool = False, log=print) -
 
 
 def main(argv=None) -> int:
+    dispatch.utf8_stdio()
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     ap.add_argument("task", nargs="?", help="the task text")
     ap.add_argument("--task-file", help="read the task from a file instead")

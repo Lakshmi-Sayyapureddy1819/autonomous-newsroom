@@ -453,3 +453,31 @@ def test_editor_bootstrap_is_judged_by_github_not_the_exit_code(tmp_path):
     d = make(tmp_path, repo, runner)
     d.tick()
     assert failures(d, "editor-bootstrap") == 0
+
+
+# ---- live-run regressions (2026-11-03 22:19) ---------------------------------------------------
+def test_extra_args_are_appended_only_when_configured(tmp_path):
+    base = {"NEWSROOM_REPO_DIR": str(tmp_path)}
+    plain = dispatch.Config(base).command("copydesk", "1", "p", "7")
+    assert "-m" not in plain, "no model override unless asked for"
+    cfg = dispatch.Config({**base, "NEWSROOM_EXTRA_ARGS_COPYDESK": "-m gemini-2.5-flash --provider gemini",
+                           "NEWSROOM_EXTRA_ARGS_FACTCHECK": "--model google/gemini-2.5-flash"})
+    assert cfg.command("copydesk", "1", "p", "7")[-4:] == ["-m", "gemini-2.5-flash",
+                                                          "--provider", "gemini"]
+    assert cfg.command("factcheck", "1", "p", "7")[-2:] == ["--model", "google/gemini-2.5-flash"]
+    assert dispatch.Config(base).command("reporter", "1", "p")[-1] != "--model"
+
+
+def test_unicode_agent_output_cannot_crash_a_cp1252_console():
+    import io
+    raw = io.BytesIO()
+    stream = io.TextIOWrapper(raw, encoding="cp1252", errors="strict")
+    old = sys.stdout
+    sys.stdout = stream
+    try:
+        dispatch.utf8_stdio()
+        print("Hermes → rate limited ⚠️ ❤")  # chars cp1252 cannot encode
+        sys.stdout.flush()
+    finally:
+        sys.stdout = old
+    assert "rate limited".encode() in raw.getvalue()

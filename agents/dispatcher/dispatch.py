@@ -22,7 +22,10 @@ Environment (all optional):
   NEWSROOM_REVIEW_MODE=deterministic (copydesk/factcheck run agents/scripts/*_agent.py, no LLM;
   default is the LLM agents), NEWSROOM_AGENT_TIMEOUT (s, default 900), NEWSROOM_MAX_TURNS (default 40),
   NEWSROOM_RETRY_BACKOFF (s, default 60), NEWSROOM_STALE_MINUTES (default 45),
-  NEWSROOM_MALFORMED_GRACE (s, default 120), NEWSROOM_MAX_WAKES (default 9).
+  NEWSROOM_MALFORMED_GRACE (s, default 120), NEWSROOM_MAX_WAKES (default 9),
+  NEWSROOM_EXTRA_ARGS_<AGENT> (shell-style args appended to that agent's command, e.g. a
+  per-run model override: NEWSROOM_EXTRA_ARGS_COPYDESK="-m gemini-2.5-flash --provider gemini";
+  OpenClaw: NEWSROOM_EXTRA_ARGS_FACTCHECK="--model google/gemini-2.5-flash"). Off by default.
 """
 
 from __future__ import annotations
@@ -106,6 +109,8 @@ class Config:
         else:  # Hermes: copydesk, editor
             argv = ["hermes", "-p", agent, "chat", "-q", prompt, "--oneshot",
                     "--max-turns", str(self.max_turns)]
+        if not override:
+            argv += shlex.split(self.env.get(f"NEWSROOM_EXTRA_ARGS_{agent.upper()}", ""))
         argv[0] = shutil.which(argv[0]) or argv[0]
         return argv
 
@@ -680,7 +685,15 @@ class Dispatcher:
             proc.kill()
 
 
+def utf8_stdio() -> None:
+    """Agent output is Unicode; a cp1252 Windows console must never crash the dispatcher."""
+    for stream in (sys.stdout, sys.stderr):
+        if hasattr(stream, "reconfigure"):
+            stream.reconfigure(encoding="utf-8", errors="replace")
+
+
 def main(argv=None) -> int:
+    utf8_stdio()
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     ap.add_argument("--dry-run", action="store_true", help="show actions, change nothing")
     args = ap.parse_args(argv)
