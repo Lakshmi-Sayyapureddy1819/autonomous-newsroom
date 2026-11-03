@@ -39,7 +39,7 @@ STATE_ROOT="$HOME/.local/state/newsroom-demo"
 RUN="$STATE_ROOT/run-$(date +%Y%m%d-%H%M%S)"
 LOCK="$STATE_ROOT/demo.lock"
 DEADLINE=$((SECONDS + TIMEOUT_MIN * 60))
-WT=""; PR=""; TICK_N=0; IDLE=0
+WT=""; PR=""; TICK_N=0; IDLE=0; NET_FAILS=0
 
 # Never print tokens: mask anything that looks like a credential in all output we relay.
 redact() { sed -E 's/(ghp_|github_pat_|sk-|AIza|gho_)[A-Za-z0-9_-]{8,}/[redacted]/g'; }
@@ -171,7 +171,14 @@ tick() {
   say ">>> dispatcher tick #$TICK_N"
   $PY "$DISPATCH/dispatch.py" 2>&1 | redact | tee "$out"
   local rc=${PIPESTATUS[0]}
-  [ "$rc" -ne 0 ] && report_failure "dispatcher exited $rc (see tick log)"
+  if [ "$rc" -ne 0 ]; then
+    # A transient GitHub/network error ("gh ... failed: ... timeout/EOF") is retried; anything else is fatal.
+    if grep -Eqi "TLS handshake timeout|EOF|timeout|connection reset|no such host" "$out" && [ "$NET_FAILS" -lt 3 ]; then
+      NET_FAILS=$((NET_FAILS + 1)); say "dispatcher could not reach GitHub (transient, $NET_FAILS/3); retrying"; sleep 15; return 0
+    fi
+    report_failure "dispatcher exited $rc (see tick log)"
+  fi
+  NET_FAILS=0
   grep -q "escalating" "$out" && report_failure "dispatcher escalated the ticket to the human"
   grep -q "malformed labels persisted" "$out" && report_failure "labels stayed inconsistent; the dispatcher blocked the ticket for the human"
   grep -q "failure [0-9]/3" "$out" && say "an invocation failed validation (the dispatcher retries up to 3 times, then escalates)"
@@ -228,14 +235,15 @@ has "$PRL" review:approved && has "$PRL" test:passed || report_failure "PR #$PR 
 say "Issue #$ISSUE labels: $L"
 say "PR    #$PR labels: $PRL"
 # Proof from the logs that every agent was actually invoked and left a VALID hand-off.
-if [ -n "${EDITOR_LOG:-}" ] && grep -q "^Editor created Issue #$ISSUE" "$EDITOR_LOG" 2>/dev/null; then
+ALL_TICKS=("$STATE_ROOT"/run-*/tick-*.log); ALL_EDITOR=("$STATE_ROOT"/run-*/editor.log)
+if grep -qh "^Editor created Issue #$ISSUE" "${ALL_EDITOR[@]}" 2>/dev/null; then
   say "evidence: Hermes Editor was invoked and created Issue #$ISSUE (validated by submit_task.py)"
 else
   say "note: no Editor log for Issue #$ISSUE in this run (resumed with --issue?)"
 fi
 for ag in reporter copydesk factcheck; do
-  if grep -qh "Waking $ag for issue-$ISSUE" "$RUN"/tick-*.log 2>/dev/null \
-     && grep -qh "issue-$ISSUE: $ag finished and the hand-off is valid" "$RUN"/tick-*.log 2>/dev/null; then
+  if grep -qh "Waking $ag for issue-$ISSUE" "${ALL_TICKS[@]}" 2>/dev/null \
+     && grep -qh "issue-$ISSUE: $ag finished and the hand-off is valid" "${ALL_TICKS[@]}" 2>/dev/null; then
     say "evidence: $ag was woken by the dispatcher and left a valid hand-off"
   else
     report_failure "no log evidence that $ag was invoked and handed off validly"
