@@ -54,3 +54,6 @@ desktop.ini
 .DS_Store
 .vscode/
 .idea/
+
+# local demo / dispatcher runtime state (never commit; the Reporter once committed a dispatcher.log)
+.local/

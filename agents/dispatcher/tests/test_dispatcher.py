@@ -36,6 +36,9 @@ class FakeGH:
     def comment(self, kind, number, body):
         self.comments.append((kind, number, body))
 
+    def activity(self, issue_no, pr):
+        return len(self.comments)
+
     def create_issue(self, title, body, labels):
         self.created.append((title, labels))
 
@@ -60,13 +63,16 @@ def test_wakes_only_the_assigned_agent(tmp_path):
     gh = FakeGH([issue(1, ["status:in-review", "agent:copydesk"]),
                  issue(2, ["status:blocked", "agent:editor"]),
                  issue(3, ["status:ready-to-merge"]),
-                 issue(4, ["status:ready", "agent:reporter", "agent:factcheck"])])
+                 issue(4, ["status:ready", "agent:reporter", "agent:factcheck"])],
+                prs=[{"number": 10, "labels": [], "closingIssuesReferences": [{"number": 1}]}])
     woken = []
 
-    def runner(agent, issue_no, prompt):
+    def runner(agent, issue_no, prompt, pr=""):
         woken.append((agent, issue_no))
+        gh.prs[0]["labels"].append({"name": "review:approved"})
         gh.edit_labels("issue", 1, ["status:in-test", "agent:factcheck"],
                        ["status:in-review", "agent:copydesk"])
+        gh.comment("pr", 10, "review")
         return 0, "ok"
 
     make(tmp_path, gh, runner).tick()
@@ -205,7 +211,8 @@ def test_deterministic_mode_command_uses_script_and_pr_number(tmp_path):
 
 def test_default_mode_keeps_llm_agents(tmp_path):
     cfg = dispatch.Config({"NEWSROOM_REPO_DIR": str(tmp_path)})
-    assert not cfg.needs_pr("copydesk") and not cfg.needs_pr("factcheck")
+    # reviewers are always woken with their resolved PR, even when an LLM agent runs
+    assert cfg.needs_pr("copydesk") and cfg.needs_pr("factcheck") and not cfg.needs_pr("reporter")
     assert cfg.command("copydesk", "14", "p")[1:3] == ["-p", "copydesk"]
     assert cfg.command("factcheck", "14", "p")[1:3] == ["agent", "--agent"]
 
@@ -218,7 +225,7 @@ def test_explicit_command_override_wins_and_substitutes_pr(tmp_path):
     assert cfg.command("copydesk", "14", "p", "21")[1:] == ["issue=14", "pr=21"]
     cfg = dispatch.Config({"NEWSROOM_REPO_DIR": str(tmp_path),
                            "NEWSROOM_CMD_COPYDESK": "echo {issue}"})
-    assert not cfg.needs_pr("copydesk")
+    assert cfg.needs_pr("copydesk") and cfg.command("copydesk", "14", "p", "21")[1:] == ["14"]
 
 
 def test_resolve_pr_maps_issue_to_its_single_open_pr(tmp_path):
@@ -266,7 +273,7 @@ def test_missing_pr_still_escalates_after_three_attempts(tmp_path):
     assert calls == [] and labels_of(gh, 14) >= {"status:blocked", "agent:editor"}
 
 
-def test_default_mode_runner_gets_no_pr_argument(tmp_path):
+def test_default_mode_runner_gets_the_resolved_pr(tmp_path):
     gh = FakeGH([review_ticket()], prs=[pr_of(21, [14])])
     got = []
 
@@ -275,7 +282,8 @@ def test_default_mode_runner_gets_no_pr_argument(tmp_path):
         return 1, "x"
 
     make(tmp_path, gh, runner).tick()
-    assert got[0][1] == {} and got[0][0][:2] == ("copydesk", "14")
+    assert got[0][1] == {"pr": "21"} and got[0][0][:2] == ("copydesk", "14")
+    assert "PR #21" in got[0][0][2] and "Issue #14" in got[0][0][2]
 
 
 def test_deterministic_script_failure_counts_and_retries(tmp_path):
