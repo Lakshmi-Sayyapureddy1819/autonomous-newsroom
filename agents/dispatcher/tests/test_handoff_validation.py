@@ -17,7 +17,9 @@ from pathlib import Path
 import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+sys.path.insert(0, str(Path(__file__).resolve().parent))
 import dispatch
+from notes import factcheck_note, reporter_note, review_note
 
 SHA1, SHA2 = "a" * 40, "b" * 40
 
@@ -52,8 +54,8 @@ class Repo:
     def comment(self, kind, number, body):
         self.comments.append((kind, number, body))
 
-    def activity(self, issue, pr):
-        return len(self.comments)
+    def thread(self, kind, number):
+        return [b for k, n, b in self.comments if (k, n) == (kind, number)]
 
     def create_issue(self, title, body, labels):
         self.created.append((title, labels))
@@ -93,20 +95,20 @@ def good_reporter(repo):
     repo.open_pr()
     repo.edit_labels("issue", 1, ["status:in-review", "agent:copydesk"],
                      ["status:ready", "agent:reporter"])
-    repo.comment("issue", 1, "### Handoff reporter -> copydesk")
+    repo.comment("issue", 1, reporter_note())
 
 
 def good_copydesk(repo):
     repo.edit_labels("pr", 7, ["review:approved"])
     repo.edit_labels("issue", 1, ["status:in-test", "agent:factcheck"],
                      ["status:in-review", "agent:copydesk"])
-    repo.comment("pr", 7, "### Review: every criterion pass")
+    repo.comment("pr", 7, review_note())
 
 
 def good_factcheck(repo):
     repo.edit_labels("pr", 7, ["test:passed"])
     repo.edit_labels("issue", 1, ["status:ready-to-merge"], ["status:in-test", "agent:factcheck"])
-    repo.comment("pr", 7, "### Test: ruff + pytest pass")
+    repo.comment("pr", 7, factcheck_note())
 
 
 def scripted(repo, **behaviours):
@@ -143,7 +145,7 @@ def test_reporter_stale_and_pr_labels_are_repaired_and_copydesk_is_woken(tmp_pat
     def sloppy_reporter(r):
         r.open_pr(labels=["status:in-review", "agent:copydesk"])           # labels on the PR
         r.edit_labels("issue", 1, ["status:in-review", "agent:copydesk"])  # forgot to remove
-        r.comment("issue", 1, "Handoff to copydesk")
+        r.comment("issue", 1, reporter_note())
 
     runner = scripted(repo, reporter=sloppy_reporter, copydesk=good_copydesk)
     d = make(tmp_path, repo, runner)
@@ -168,7 +170,7 @@ def test_reporter_wrong_handoff_is_a_failure_not_progress(tmp_path, labels):
     def reporter(r):
         r.open_pr()
         r.issue_labels[:] = labels + ["attempt:1"]
-        r.comment("issue", 1, "done")
+        r.comment("issue", 1, reporter_note())
 
     d = make(tmp_path, repo, scripted(repo, reporter=reporter))
     d.tick()
@@ -185,7 +187,7 @@ def test_reporter_without_pr_or_with_two_prs_fails(tmp_path):
             setup(r)
             r.edit_labels("issue", 1, ["status:in-review", "agent:copydesk"],
                           ["status:ready", "agent:reporter"])
-            r.comment("issue", 1, "done")
+            r.comment("issue", 1, reporter_note())
 
         d = make(tmp_path / str(len(repo.prs)), repo, scripted(repo, reporter=reporter))
         d.tick()
@@ -202,7 +204,7 @@ def test_reporter_silent_handoff_without_a_comment_fails(tmp_path):
 
     d = make(tmp_path, repo, scripted(repo, reporter=silent))
     d.tick()
-    assert "no handoff comment" in d.state.load("issue-1")["last_error"]
+    assert "no new comment" in d.state.load("issue-1")["last_error"]
 
 
 def test_nonzero_exit_with_a_valid_handoff_is_accepted_and_not_rerun(tmp_path):
@@ -223,10 +225,10 @@ def test_nonzero_exit_with_a_valid_handoff_is_accepted_and_not_rerun(tmp_path):
 
 def test_copydesk_without_verdict_conflicting_verdicts_or_no_pr(tmp_path):
     cases = {
-        "no verdict": (lambda r: r.comment("pr", 7, "looks fine"), "no review:approved"),
+        "no verdict": (lambda r: r.comment("pr", 7, review_note()), "no review:approved"),
         "conflict": (lambda r: (r.edit_labels("pr", 7, ["review:approved",
                                                          "review:changes-requested"]),
-                                r.comment("pr", 7, "?")), "conflicting"),
+                                r.comment("pr", 7, review_note())), "conflicting"),
     }
     for i, (name, (act, why)) in enumerate(cases.items()):
         repo = Repo(["status:in-review", "agent:copydesk", "attempt:1"])
@@ -243,7 +245,7 @@ def test_copydesk_rejection_routes_back_to_reporter_on_the_same_pr(tmp_path):
 
     def rejecting(r):
         r.edit_labels("pr", 7, ["review:changes-requested"])
-        r.comment("pr", 7, "criterion 2 fails: extra file")
+        r.comment("pr", 7, review_note(criteria=2, fails=1))
 
     runner = scripted(repo, copydesk=rejecting, reporter=lambda r: None)
     d = make(tmp_path, repo, runner)

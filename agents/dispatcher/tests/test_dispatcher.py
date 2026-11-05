@@ -8,6 +8,7 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import dispatch  # noqa: E402
 import editor_lifecycle as lc  # noqa: E402
+from notes import review_note  # noqa: E402
 
 
 class FakeGH:
@@ -36,8 +37,8 @@ class FakeGH:
     def comment(self, kind, number, body):
         self.comments.append((kind, number, body))
 
-    def activity(self, issue_no, pr):
-        return len(self.comments)
+    def thread(self, kind, number):
+        return [b for k, n, b in self.comments if (k, n) == (kind, number)]
 
     def create_issue(self, title, body, labels):
         self.created.append((title, labels))
@@ -72,7 +73,7 @@ def test_wakes_only_the_assigned_agent(tmp_path):
         gh.prs[0]["labels"].append({"name": "review:approved"})
         gh.edit_labels("issue", 1, ["status:in-test", "agent:factcheck"],
                        ["status:in-review", "agent:copydesk"])
-        gh.comment("pr", 10, "review")
+        gh.comment("pr", 10, review_note(1, 10))
         return 0, "ok"
 
     make(tmp_path, gh, runner).tick()

@@ -8,7 +8,9 @@ Each tick:
 3. Wake ONLY the agent named by each ticket's single agent:* label, one invocation per
    agent at a time (lock file), then RE-READ GitHub and validate the hand-off (see
    `Dispatcher._evaluate`): exactly one linked PR, the expected Issue labels, the verdict
-   label on the PR, no status:*/agent:* on the PR, an unmoved PR head, a new comment.
+   label on the PR, no status:*/agent:* on the PR, an unmoved PR head, and a new comment that
+   names THIS Issue and PR and passes the role checks in handoff.py (a generic comment or one
+   about another task is rejected and the hand-off is undone).
 4. An invocation that fails or leaves an invalid hand-off counts as a failed attempt. A
    valid hand-off wins over a non-zero exit (the outcome is read from GitHub, never guessed),
    and a timed-out agent is never re-woken while its lock is held. State survives restarts.
@@ -45,6 +47,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import editor_lifecycle as lifecycle  # noqa: E402
+import handoff
 
 MAX_FAILURES = 3
 WAKE = {  # (status, agent) -> wake. in-progress is only woken when stale.
@@ -71,6 +74,11 @@ UNCERTAIN = re.compile(r"turn outcome is unknown|Gateway disconnected|keepalive 
 TRANSIENT_GH = re.compile(r"TLS handshake timeout|EOF|connection reset|timed? ?out|"
                           r"temporarily unavailable|HTTP 50[234]|no such host|dial tcp",
                           re.IGNORECASE)
+# Errors a retry cannot fix (bad credentials, exhausted quota): escalate at once instead of
+# burning two more model invocations. A plain 429 stays a backed-off retry.
+FATAL = re.compile(r"(HTTP|status|error|code)[ :=]*40[123]\b|unauthori[sz]ed|invalid api key|"
+                   r"api key (not valid|expired)|authentication (failed|error)|quota|"
+                   r"RESOURCE_EXHAUSTED|insufficient (credit|balance)", re.IGNORECASE)
 SECRET = re.compile(r"(ghp_|gho_|github_pat_|sk-|AIza)[A-Za-z0-9_\-]{8,}")
 
 
@@ -104,7 +112,11 @@ class Config:
             return True
         return agent in NEEDS_PR_ARG
 
-    def command(self, agent: str, issue: str, prompt: str, pr: str = "") -> list[str]:
+    def command(self, agent: str, issue: str, prompt: str, pr: str = "",
+                prompt_file: str = "", session: str = "") -> list[str]:
+        """argv for one invocation. With `prompt_file` the prompt is passed as a file (no argv
+        length limit, no shell quoting); `session` is a unique id so that no invocation ever
+        resumes another task's conversation."""
         override = self.env.get(f"NEWSROOM_CMD_{agent.upper()}")
         if override:
             argv = [a.replace("{issue}", issue).replace("{pr}", pr).replace("{prompt}", prompt)
@@ -112,12 +124,17 @@ class Config:
         elif self.deterministic and agent in DETERMINISTIC:
             argv = [sys.executable, str(self.root / "agents" / "scripts" / DETERMINISTIC[agent]),
                     pr]
-        elif agent in ("reporter", "factcheck"):  # OpenClaw
-            argv = ["openclaw", "agent", "--agent", agent, "--message", prompt,
-                    "--timeout", str(self.timeout)]
-        else:  # Hermes: copydesk, editor
-            argv = ["hermes", "-p", agent, "chat", "-q", prompt, "--oneshot",
-                    "--max-turns", str(self.max_turns)]
+        elif agent in ("reporter", "factcheck"):  # OpenClaw: own session id per invocation
+            argv = ["openclaw", "agent", "--agent", agent]
+            argv += ["--message-file", prompt_file] if prompt_file else ["--message", prompt]
+            argv += ["--timeout", str(self.timeout)]
+            if session:
+                argv += ["--session-id", session]
+        else:  # Hermes: copydesk, editor. --oneshot starts a NEW session; never --resume/-c.
+            argv = ["hermes", "-p", agent, "chat"]
+            argv += ["--query-file", prompt_file] if prompt_file else ["-q", prompt]
+            argv += ["--oneshot", "--source", "tool", "--max-turns", str(self.max_turns),
+                     "--run-budget", str(self.timeout)]
         if not override:
             argv += shlex.split(self.env.get(f"NEWSROOM_EXTRA_ARGS_{agent.upper()}", ""))
         argv[0] = shutil.which(argv[0]) or argv[0]
@@ -149,16 +166,17 @@ class GitHub:
 
     def open_prs(self) -> list[dict]:
         return json.loads(self._gh("pr", "list", "--state", "open", "--limit", "100", "--json",
-                                   "number,labels,closingIssuesReferences,headRefOid"))
+                                   "number,labels,closingIssuesReferences,headRefOid,headRefName"))
 
-    def activity(self, issue: int, pr: int | None) -> int:
-        """Comments on the Issue plus comments and reviews on the PR (a hand-off must add one)."""
-        data = json.loads(self._gh("issue", "view", str(issue), "--json", "comments"))
-        count = len(data["comments"])
-        if pr:
-            data = json.loads(self._gh("pr", "view", str(pr), "--json", "comments,reviews"))
-            count += len(data["comments"]) + len(data["reviews"])
-        return count
+    def thread(self, kind: str, number: int) -> list[str]:
+        """Bodies of every comment (and, for a PR, review) in order. One gh call."""
+        if kind == "issue":
+            return [c["body"] for c in json.loads(
+                self._gh("issue", "view", str(number), "--json", "comments"))["comments"]]
+        data = json.loads(self._gh("pr", "view", str(number), "--json", "comments,reviews"))
+        items = [(c.get("createdAt") or "", c["body"]) for c in data["comments"]]
+        items += [(r.get("submittedAt") or "", r.get("body") or "") for r in data["reviews"]]
+        return [body for _, body in sorted(items, key=lambda x: x[0])]  # chronological
 
     def edit_labels(self, kind: str, number: int, add=(), remove=()) -> None:
         args = [kind, "edit", str(number)]
@@ -272,6 +290,14 @@ def label_problem(t: lifecycle.Ticket) -> str:
     return ""
 
 
+HANDOFF_FORMAT = (
+    "Every hand-off comment MUST start with these lines (the dispatcher rejects anything else, "
+    "including a generic 'handoff done' comment or one that names another Issue/PR):\n"
+    "### Handoff  {me} → {to}\n"
+    "Ticket: #{n} · PR: #{pr} · Attempt: {attempt}\n"
+    "followed by Did / How to verify / Known gaps / Tokens."
+)
+
 ROLE_RULES = {
     "reporter": (
         "Work ONLY in the checkout named above. If a branch or open PR for this Issue already "
@@ -279,34 +305,48 @@ ROLE_RULES = {
         "run `git status` before committing so nothing else is staged. The PR body must contain "
         "'Closes #{n}'. Never put status:* or agent:* labels on the PR. When done, on the "
         "ISSUE: add status:in-review and agent:copydesk, remove status:ready, status:in-progress "
-        "and agent:reporter; then post the handoff comment on the Issue and on the PR."
+        "and agent:reporter; then post the handoff comment on the Issue and on the PR. Do not "
+        "say you are 'waiting for review': you finish only after the hand-off labels and "
+        "comments exist."
     ),
     "copydesk": (
-        "Review PR #{pr} at its CURRENT head against EVERY acceptance criterion and the Out "
-        "of scope section of the Issue. Run `gh pr diff {pr} --name-only`: any file the Issue "
+        "FIRST verify, with `gh pr view {pr} --json closingIssuesReferences,headRefOid`, that "
+        "PR #{pr} closes Issue #{n} and that its head is the expected head SHA above. If either "
+        "differs, STOP: post nothing, change no labels, and print the mismatch. Then review "
+        "PR #{pr} at that head against EVERY acceptance criterion and the Out "
+        "of scope section of the Issue above (use only that text, never another Issue's). "
+        "Run `gh pr diff {pr} --name-only`: any file the Issue "
         "does not allow is a failed criterion. Post a review comment on the PR listing each "
-        "criterion as pass/fail with file:line evidence. If all pass: add review:approved to the "
-        "PR; on the ISSUE add status:in-test and agent:factcheck and remove status:in-review and "
-        "agent:copydesk. If any fails: add review:changes-requested to the PR and leave the "
-        "Issue labels alone (the dispatcher re-routes). Never put status:* or agent:* on the PR. "
-        "Do not edit, commit or push."
+        "criterion as pass/fail with file:line evidence: one `- [x] <criterion> — PASS (...)` or "
+        "`- [ ] <criterion> — FAIL (...)` line per acceptance criterion, a `#### Out of scope` "
+        "section with a PASS/FAIL line per restriction, the head SHA, and `#### Required "
+        "Fixes` (exact corrected code) when anything fails. If all pass: add review:approved to "
+        "the PR; on the ISSUE add status:in-test and agent:factcheck and remove "
+        "status:in-review and agent:copydesk. If any fails: add review:changes-requested to the "
+        "PR and leave the Issue labels alone (the dispatcher re-routes). Never put status:* or "
+        "agent:* on the PR. Do not edit, commit or push. Do NOT look at other Issues or PRs."
     ),
     "factcheck": (
         "Test PR #{pr}. Fetch and check out its EXACT head SHA in the checkout named above "
         "(`git -C <checkout> fetch origin pull/{pr}/head` then `git -C <checkout> checkout "
-        "--detach FETCH_HEAD`; it must equal `gh pr view {pr} --json headRefOid`), record the SHA, "
+        "--detach FETCH_HEAD`; it must equal `gh pr view {pr} --json headRefOid`, and that is "
+        "the expected head SHA above), record the SHA, "
         "run `ruff check app/` and the pytest suite, and verify each acceptance criterion by "
-        "command. Post the commands, output and SHA as a PR comment. If everything passes and "
+        "command. Post the SHA, commands and output as a PR comment (it must show ruff and "
+        "pytest). If everything passes and "
         "the PR head is still that SHA: add test:passed to the PR; on the ISSUE add "
         "status:ready-to-merge and remove status:in-test and agent:factcheck. Otherwise add "
         "test:failed to the PR and leave the Issue labels alone. Never put status:* or agent:* "
         "on the PR. Do not edit, commit or push."
     ),
 }
+NEXT = {"reporter": "copydesk", "copydesk": "factcheck", "factcheck": "editor"}
 
 
 def prompt_for(agent: str, number: int, t: lifecycle.Ticket | None, root: Path | None = None,
-               pr: str = "", repo: str = "") -> str:
+               pr: str = "", repo: str = "", ctx: dict | None = None) -> str:
+    """The complete, self-contained task prompt. `ctx` (all optional): head, branch, attempt,
+    review (latest valid review text for this task), run_dir (fresh scratch directory)."""
     if agent == "editor":
         return (
             "You are the editor. Read agents/PROTOCOL.md and docs/brief.md. The repository has "
@@ -317,6 +357,7 @@ def prompt_for(agent: str, number: int, t: lifecycle.Ticket | None, root: Path |
             "status label; the dispatcher promotes it when its dependencies are merged. Do not "
             "edit app/ or deploy/. Finish with a handoff comment on the first ticket."
         )
+    ctx = ctx or {}
     if root and repo:
         where = (f" Repository: {repo}. Your clean checkout is {root}. Do ALL git and file work "
                  f"there: run git as `git -C \"{root}\" ...` and never use the git remote or the "
@@ -327,13 +368,46 @@ def prompt_for(agent: str, number: int, t: lifecycle.Ticket | None, root: Path |
                  "and in no other checkout.")
     else:
         where = ""
-    pr_note = f" The linked PR is #{pr}." if pr else ""
     rules = ROLE_RULES.get(agent, "").format(n=number, pr=pr or "?")
+    attempt = ctx.get("attempt") or (t.attempt if t else 1) or 1
+    facts = [f"Repository: {repo or '(see checkout)'}", f"Issue: #{number} ({t.title if t else ''})",
+             f"Attempt: {attempt} of {lifecycle.MAX_ATTEMPTS}"]
+    if pr:
+        facts.append(f"Pull request: #{pr}" + (f" (branch {ctx['branch']})" if ctx.get("branch")
+                                              else ""))
+    else:
+        facts.append("Pull request: none yet (create exactly one)")
+    if ctx.get("head"):
+        facts.append(f"Expected PR head SHA: {ctx['head']}")
+    task = "TASK FACTS (authoritative; they override anything you remember from earlier work):\n"
+    task += "\n".join(f"- {f}" for f in facts)
+    body = (t.body if t else "").strip()
+    task += f"\n\nISSUE #{number} BODY (verbatim):\n<<<\n{body}\n>>>"
+    if (agent == "reporter" and attempt > 1) or ctx.get("review"):
+        review = ctx.get("review") or ("(no valid review for this task was found; read the "
+                                       f"comments on PR #{pr or '?'} yourself)")
+        task += (f"\n\nLATEST REVIEW FOR THIS TASK (fix EVERY failed criterion and every "
+                 f"'Required Fix'):\n<<<\n{review}\n>>>")
+    if ctx.get("handoff"):
+        task += f"\n\nLATEST REPORTER HANDOFF FOR THIS TASK:\n<<<\n{ctx['handoff']}\n>>>"
+    if agent == "reporter" and attempt > 1:
+        rules += (f" RETRY: this is attempt {attempt}. Check out the existing branch of PR "
+                  f"#{pr or '?'} and pull it; fix every failed criterion above; add or correct "
+                  "tests (assert the exact literal values the Issue states, not what the code "
+                  "currently returns); run the relevant tests and ruff; inspect `git diff` and "
+                  "`git status`; commit and push ONLY the task's files to that same branch (no "
+                  "force-push, no new PR); then hand off. A retry that pushes no new commit is "
+                  "rejected.")
+    scratch = (f" Put any temporary file (e.g. the comment body for `--body-file`) ONLY in the "
+               f"fresh directory {ctx['run_dir']}; never read or reuse files from earlier runs, "
+               "and do not read agents/traces/." if ctx.get("run_dir") else "")
+    fmt = HANDOFF_FORMAT.format(me=agent, to=NEXT.get(agent, "editor"), n=number,
+                                pr=pr or "<the PR number>", attempt=attempt)
     return (
-        f"You are {agent}. Work ONLY on Issue #{number} ({t.title if t else ''}).{pr_note}{where} "
-        "Read agents/PROTOCOL.md first. Follow your role instructions, never merge, and finish by "
-        "updating the labels and posting the handoff comment on the Issue (and PR) exactly as "
-        f"the protocol specifies. GitHub is the only channel to other agents. {rules}"
+        f"You are {agent}. Work ONLY on Issue #{number}.{where}\n\n{task}\n\n"
+        "agents/PROTOCOL.md describes the label state machine; read it only if you need a "
+        "detail the rules below do not give. Never merge. GitHub is the only channel to "
+        f"other agents.{scratch}\n\nYOUR RULES: {rules}\n\n{fmt}"
     ).strip()
 
 
@@ -375,17 +449,18 @@ class Dispatcher:
             self.gh.comment("issue", a["issue"], a["comment"])
         return bool(actions)
 
-    def resolve_pr(self, issue: int) -> tuple[int | None, str]:
+    def resolve_pr(self, issue: int, open_prs: list[dict] | None = None
+                   ) -> tuple[int | None, str]:
         """The one open PR that closes `issue`, or (None, reason)."""
-        prs = self._linked_prs(issue)
+        prs = self._linked_prs(issue, open_prs)
         if len(prs) == 1:
             return prs[0], ""
         if not prs:
             return None, f"no open PR closes #{issue}"
         return None, f"ambiguous: open PRs {sorted(prs)} all close #{issue}"
 
-    def _linked_prs(self, issue: int) -> list[int]:
-        return [pr["number"] for pr in self.gh.open_prs()
+    def _linked_prs(self, issue: int, open_prs: list[dict] | None = None) -> list[int]:
+        return [pr["number"] for pr in (self.gh.open_prs() if open_prs is None else open_prs)
                 if any(r["number"] == issue for r in pr.get("closingIssuesReferences") or [])]
 
     # ---- one tick ------------------------------------------------------------------
@@ -465,27 +540,34 @@ class Dispatcher:
         try:
             self.log(f"Waking {agent} for {key} ({sig})")
             extra, code, output, pr = {}, None, "", None
+            open_prs = self.gh.open_prs() if t else []  # read once, reused below
             if self.cfg.needs_pr(agent):
-                pr, why = self.resolve_pr(number)
+                pr, why = self.resolve_pr(number, open_prs)
                 if pr is None:
                     code, output = 2, why  # counts as a failed attempt; agent not started
                 else:
                     extra = {"pr": str(pr)}
+            elif t and agent == "reporter":  # a retry continues the existing PR
+                pr = self.resolve_pr(number, open_prs)[0]
             if code is None and agent == "reporter":
                 dirty = self._dirty(self.cfg.root)
                 if dirty:
                     code, output = 2, f"working checkout {self.cfg.root} is not clean: {dirty}"
-            before = {}
+            before, ctx = {}, {}
             if code is None and t:
-                before = self._snapshot(number, pr)
+                before, texts = self._snapshot(number, pr, open_prs)
                 before["labels"] = sorted(t.with_prefix("status:") + t.with_prefix("agent:"))
+                before["attempt"] = t.attempt
+                before["pr_labels"] = sorted(t.pr_labels)
+                ctx = self._context(agent, number, t, pr, open_prs, texts)
             if code is None:
-                prompt = prompt_for(agent, number, t, self.cfg.root, extra.get("pr", ""),
-                                    self.cfg.repo)
+                prompt = prompt_for(agent, number, t, self.cfg.root, str(pr or ""),
+                                    self.cfg.repo, ctx)
                 code, output = self.run_agent(agent, str(number), prompt, **extra)
                 self.state.save(wakes_key, {"count": wakes + 1})
             st["last_attempt"] = self.now()
             st["rate_limited"] = bool(re.search(r"\b(402|429)\b", output))
+            fatal = bool(code and FATAL.search(output))
             never_started = not before and t and code is not None and code != 0
             uncertain = code == 124 or bool(UNCERTAIN.search(output))
             if never_started:
@@ -518,6 +600,9 @@ class Dispatcher:
                 st["failures"] += 1
                 detail = "" if never_started else f" (exit {code}: {output})" if code else ""
                 st["last_error"] = sanitize(f"{problem}{detail}")
+                if fatal and not never_started:  # credentials/quota: a retry cannot succeed
+                    st["failures"] = MAX_FAILURES
+                    self.log(f"{key}: {agent} hit an authentication/quota error; not retrying")
                 self.log(f"{key}: failure {st['failures']}/{MAX_FAILURES} "
                          f"(exit {code}): {st['last_error'][:160]}")
             if st["failures"] >= MAX_FAILURES:
@@ -565,9 +650,43 @@ class Dispatcher:
                              capture_output=True, text=True, check=False)
         return " ".join(out.stdout.split())[:200] if out.returncode == 0 else ""
 
-    def _snapshot(self, number: int, pr: int | None) -> dict:
-        head = next((p.get("headRefOid") for p in self.gh.open_prs() if p["number"] == pr), None)
-        return {"head": head, "activity": self.gh.activity(number, pr)}
+    def _snapshot(self, number: int, pr: int | None,
+                  open_prs: list[dict] | None = None) -> tuple[dict, dict]:
+        """What GitHub looked like before the run (head SHA, comment counts) plus the comment
+        texts that were read to take it."""
+        prs = self.gh.open_prs() if open_prs is None else open_prs
+        found = next((p for p in prs if p["number"] == pr), None) or {}
+        texts = {"issue": self.gh.thread("issue", number),
+                 "pr": self.gh.thread("pr", pr) if pr else []}
+        before = {"head": found.get("headRefOid"), "n_issue": len(texts["issue"]),
+                  "n_pr": len(texts["pr"])}
+        return before, texts
+
+    def _context(self, agent: str, number: int, t: lifecycle.Ticket, pr: int | None,
+                 open_prs: list[dict], texts: dict) -> dict:
+        """Task facts for the prompt, all derived from THIS Issue/PR (never from memory)."""
+        found = next((p for p in open_prs if p["number"] == pr), None) or {}
+        every = texts["issue"] + texts["pr"]
+        run_dir = self.state.dir / "runs" / f"{agent}-{number}-{int(self.now() * 1000)}"
+        run_dir.mkdir(parents=True, exist_ok=True)
+        ctx = {"head": found.get("headRefOid"), "branch": found.get("headRefName"),
+               "attempt": t.attempt, "run_dir": str(run_dir)}
+        if agent == "reporter":
+            ctx["review"] = handoff.latest_handoff(every, number, pr, ("copydesk", "factcheck"))
+        elif agent == "copydesk":
+            ctx["handoff"] = handoff.latest_handoff(every, number, pr, ("reporter",))
+        return ctx
+
+    def _new_texts(self, number: int, pr: int | None, before: dict) -> list[str]:
+        """Comments/reviews added on the Issue and PR since `before` was taken."""
+        out = []
+        for kind, num, key in (("issue", number, "n_issue"), ("pr", pr, "n_pr")):
+            if not num:
+                continue
+            texts = self.gh.thread(kind, num)
+            seen = before.get(key)
+            out += texts[seen:] if seen is not None else texts[-3:]
+        return out
 
     def _evaluate(self, agent: str, number: int, before: dict) -> str:
         """Re-read GitHub after an invocation. '' if the agent left a valid hand-off, else why
@@ -601,9 +720,20 @@ class Dispatcher:
                 problem = (f"PR head moved {before['head'][:8]} -> {head[:8]} during the run; the "
                            "verdict is stale")
                 self._rollback(number, pr["number"], before, pr_labels, notes)
-        if not problem and self.gh.activity(number, pr["number"] if pr else None) <= before.get(
-                "activity", -1):
-            problem = "no handoff comment or review was posted"
+        head = pr.get("headRefOid") if pr else None
+        if (not problem and agent == "reporter" and pr and before.get("attempt", 1) > 1
+                and before.get("head") and head == before["head"]):
+            problem = (f"reporter attempt {before['attempt']} pushed no new commit to PR "
+                       f"#{pr['number']}; the review's failed criteria were not fixed")
+            self._rollback(number, pr["number"], before, pr_labels, notes, everything=True)
+        if not problem:
+            problem = handoff.validate(
+                agent, number, pr["number"] if pr else None, head,
+                self._new_texts(number, pr["number"] if pr else None, before),
+                issue.get("body") or "",
+                "approved" if "review:approved" in pr_labels else "changes")
+            if problem and pr:
+                self._rollback(number, pr["number"], before, pr_labels, notes, everything=True)
         if notes:
             self.log(f"#{number}: dispatcher normalised after {agent}: " + "; ".join(notes))
             if not self.dry:
@@ -661,10 +791,16 @@ class Dispatcher:
         return ""
 
     def _rollback(self, number: int, pr: int, before: dict, pr_labels: set[str],
-                  notes: list[str]) -> None:
-        """The PR head moved under a reviewer/tester: drop its verdict and restore the Issue's
-        previous owner so the same agent runs again on the new head."""
-        verdicts = sorted(pr_labels & {"review:approved", "test:passed"})
+                  notes: list[str], everything: bool = False) -> None:
+        """The PR head moved under a reviewer/tester, or its hand-off was invalid: drop its
+        verdict (`everything`: every verdict it added) and restore the Issue's previous owner
+        so the same agent runs again."""
+        if everything:
+            keep = set(before.get("pr_labels", []))
+            verdicts = sorted(x for x in pr_labels if x.startswith(lifecycle.VERDICT_PREFIXES)
+                              and x not in keep)
+        else:
+            verdicts = sorted(pr_labels & {"review:approved", "test:passed"})
         issue = next((i for i in self.gh.issues("open") if i["number"] == number), None)
         now = {x["name"] for x in issue["labels"]
                if x["name"].startswith(HANDOFF_PREFIXES)} if issue else set()
@@ -721,7 +857,13 @@ class Dispatcher:
 
     def _run_subprocess(self, agent: str, issue: str, prompt: str,
                         pr: str = "") -> tuple[int, str]:
-        argv = self.cfg.command(agent, issue, prompt, pr)
+        stamp = int(self.now() * 1000)
+        prompts = self.state.dir / "prompts"
+        prompts.mkdir(exist_ok=True)
+        prompt_file = prompts / f"{agent}-{issue}-{stamp}.md"
+        prompt_file.write_text(prompt, encoding="utf-8")
+        session = f"nr-{self.cfg.repo.replace('/', '-')}-{agent}-{issue}-{stamp}".lower()
+        argv = self.cfg.command(agent, issue, prompt, pr, str(prompt_file), session)
         log = self.state.dir / "logs" / f"{agent}-{issue}-{int(self.now())}.log"
         group = ({"creationflags": subprocess.CREATE_NEW_PROCESS_GROUP} if os.name == "nt"
                  else {"start_new_session": True})

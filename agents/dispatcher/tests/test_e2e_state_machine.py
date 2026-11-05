@@ -18,6 +18,7 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import dispatch
+from notes import factcheck_note, reporter_note, review_note
 
 GATE = Path(__file__).resolve().parents[3] / ".github" / "scripts" / "gate_decide.sh"
 needs_bash = pytest.mark.skipif(shutil.which("bash") is None, reason="bash not available")
@@ -50,8 +51,8 @@ class FakeGitHub:
     def comment(self, kind, number, body):
         self.comments.append((kind, number, body))
 
-    def activity(self, issue_no, pr):
-        return len(self.comments)
+    def thread(self, kind, number):
+        return [b for k, n, b in self.comments if (k, n) == (kind, number)]
 
     def create_issue(self, *a):  # pragma: no cover - must not be reached
         raise AssertionError("dispatcher must not create issues in this scenario")
@@ -85,17 +86,17 @@ def test_full_cycle_ticket_to_ready_to_merge(tmp_path):
             gh.pr = {"number": 7, "labels": [], "closingIssuesReferences": [{"number": 1}]}
             gh.edit_labels("issue", 1, ["status:in-review", "agent:copydesk"],
                            ["status:in-progress", "agent:reporter"])
-            gh.comment("issue", 1, "### Handoff reporter -> copydesk")
+            gh.comment("issue", 1, reporter_note())
         elif agent == "copydesk":
             gh.edit_labels("pr", 7, ["review:approved"])
             gh.edit_labels("issue", 1, ["status:in-test", "agent:factcheck"],
                            ["status:in-review", "agent:copydesk"])
-            gh.comment("pr", 7, "### Review: all criteria pass")
+            gh.comment("pr", 7, review_note())
         elif agent == "factcheck":
             gh.edit_labels("pr", 7, ["test:passed"])
             gh.edit_labels("issue", 1, ["status:ready-to-merge"],
                            ["status:in-test", "agent:factcheck"])
-            gh.comment("pr", 7, "### Test: ruff + pytest pass")
+            gh.comment("pr", 7, factcheck_note())
         else:  # pragma: no cover
             raise AssertionError(f"unexpected agent woken: {agent}")
         return 0, "ok"
