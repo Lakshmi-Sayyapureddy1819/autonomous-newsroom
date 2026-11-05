@@ -229,6 +229,11 @@ def last_successful_run(conn: sqlite3.Connection) -> str | None:
     return row["finished_at"] if row else None
 
 
+@app.get("/version")
+def get_version() -> dict:
+    return {"name": SITE_NAME, "tagline": SITE_TAGLINE}
+
+
 @app.get("/", response_class=HTMLResponse)
 def homepage(
     request: Request,
