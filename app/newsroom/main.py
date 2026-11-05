@@ -231,7 +231,7 @@ def last_successful_run(conn: sqlite3.Connection) -> str | None:
 
 @app.get("/version")
 def get_version() -> dict:
-    return {"site_name": SITE_NAME, "site_tagline": SITE_TAGLINE}
+    return {"name": SITE_NAME, "tagline": SITE_TAGLINE}
 
 
 @app.get("/", response_class=HTMLResponse)
