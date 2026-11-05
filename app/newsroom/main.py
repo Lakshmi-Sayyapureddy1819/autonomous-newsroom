@@ -234,6 +234,11 @@ def get_version() -> dict:
     return {"name": SITE_NAME, "tagline": SITE_TAGLINE}
 
 
+@app.get("/build-info")
+def get_build_info() -> dict:
+    return {"service": "autonomous-newsroom", "status": "ok"}
+
+
 @app.get("/", response_class=HTMLResponse)
 def homepage(
     request: Request,
