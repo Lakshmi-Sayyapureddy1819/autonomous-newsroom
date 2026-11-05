@@ -75,8 +75,7 @@ def plan_actions(open_tickets: list[Ticket], closed_numbers: set[int]) -> list[d
                 actions.append({
                     "issue": t.number,
                     "add": ["status:blocked", "agent:editor"],
-                    "remove": status + t.with_prefix("agent:") + t.with_prefix("attempt:")
-                    + stale,
+                    "remove": status + t.with_prefix("agent:") + t.with_prefix("attempt:"),
                     "pr_remove": stale,
                     "comment": (
                         f"### Escalation  editor → human\nTicket: #{t.number} · Attempt: "
@@ -89,8 +88,7 @@ def plan_actions(open_tickets: list[Ticket], closed_numbers: set[int]) -> list[d
                 actions.append({
                     "issue": t.number,
                     "add": ["status:ready", "agent:reporter", f"attempt:{nxt}"],
-                    "remove": status + t.with_prefix("agent:") + t.with_prefix("attempt:")
-                    + stale,
+                    "remove": status + t.with_prefix("agent:") + t.with_prefix("attempt:"),
                     "pr_remove": stale,
                     "comment": (
                         f"### Handoff  editor → reporter\nTicket: #{t.number} · Attempt: {nxt}\n"

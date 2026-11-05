@@ -150,7 +150,9 @@ def test_reroute_after_changes_requested():
                   {"review:changes-requested"})
     (a,) = lc.plan_actions([t], set())
     assert a["add"] == ["status:ready", "agent:reporter", "attempt:2"]
-    assert "review:changes-requested" in a["remove"] and "attempt:1" in a["remove"]
+    # Issue labels and PR labels are removed separately: the verdict label lives on the PR.
+    assert "attempt:1" in a["remove"] and "review:changes-requested" not in a["remove"]
+    assert a["pr_remove"] == ["review:changes-requested"]
 
 
 def test_escalate_after_third_attempt():
