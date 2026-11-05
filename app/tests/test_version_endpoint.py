@@ -1,5 +1,7 @@
 from fastapi.testclient import TestClient
-from newsroom.main import app, SITE_NAME, SITE_TAGLINE
+
+from newsroom.main import SITE_NAME, SITE_TAGLINE, app
+
 
 def test_get_version_endpoint():
     client = TestClient(app)
