@@ -57,9 +57,3 @@ desktop.ini
 
 # local demo / dispatcher runtime state (never commit; the Reporter once committed a dispatcher.log)
 .local/
-
-$TMPDIR/
-LIVE_INTERVIEW_RUNBOOK.md
-docs/gap-tickets.md
-C\357\200\272UsersYasaswiniAppDataLocalhermescachescratchinstall.ps1
-"C*install.ps1"
