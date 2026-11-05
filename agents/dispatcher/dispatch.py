@@ -725,8 +725,28 @@ class Dispatcher:
         log = self.state.dir / "logs" / f"{agent}-{issue}-{int(self.now())}.log"
         group = ({"creationflags": subprocess.CREATE_NEW_PROCESS_GROUP} if os.name == "nt"
                  else {"start_new_session": True})
+        
+        # Use a separate Git clone for OpenClaw agents to avoid modifying the primary checkout
+        cwd = self.cfg.root
+        clone_dir = None
+        if agent in ("reporter", "factcheck"):
+            clone_dir = self.cfg.root.parent / f"temp_clone_{agent}_{issue}_{int(self.now())}"
+            self.log(f"Creating clean clone at {clone_dir} for {agent}...")
+            if clone_dir.exists():
+                import shutil
+                shutil.rmtree(clone_dir, ignore_errors=True)
+            try:
+                subprocess.run(["git", "clone", str(self.cfg.root), str(clone_dir)], check=True, capture_output=True)
+                cwd = clone_dir
+                if pr:
+                    self.log(f"Checking out PR {pr} in clone...")
+                    subprocess.run(["git", "fetch", "origin", f"pull/{pr}/head:pr-{pr}"], check=True, cwd=cwd, capture_output=True)
+                    subprocess.run(["git", "checkout", f"pr-{pr}"], check=True, cwd=cwd, capture_output=True)
+            except Exception as e:
+                return 128, f"Failed to setup clone for {agent}: {e}"
+
         try:
-            proc = subprocess.Popen(argv, cwd=self.cfg.root, stdout=subprocess.PIPE,
+            proc = subprocess.Popen(argv, cwd=cwd, stdout=subprocess.PIPE,
                                     stderr=subprocess.PIPE, encoding="utf-8", errors="replace",
                                     **group)
             try:
@@ -737,6 +757,12 @@ class Dispatcher:
                 text, code = "timed out; outcome uncertain", 124
         except OSError as exc:
             text, code = f"could not start {argv[0]}: {exc}", 127
+        finally:
+            if clone_dir and clone_dir.exists():
+                self.log(f"Cleaning up clone at {clone_dir}...")
+                import shutil
+                shutil.rmtree(clone_dir, ignore_errors=True)
+
         log.write_text(sanitize(text, 20000), encoding="utf-8")
         return code, text
 
