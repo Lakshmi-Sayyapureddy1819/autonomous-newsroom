@@ -71,8 +71,18 @@ ok "OpenClaw Gateway healthy"
 hermes gateway status >/dev/null 2>&1 && ok "hermes gateway running" || echo "note: 'hermes gateway status' reported a problem (one-shot agents may still work)"
 
 step "4/6 Warm-up (first model call is the slowest)"
-hermes -p editor chat -q "Reply with the single word OK" >/dev/null 2>&1 && ok "hermes editor answers" || die "hermes editor did not answer"
-hermes -p copydesk chat -q "Reply with the single word OK" >/dev/null 2>&1 && ok "hermes copydesk answers" || die "hermes copydesk did not answer"
+# A single transient blip (rate limit, network) must not abort the demo: try up to 3 times.
+warm() {
+  local prof="$1" out="" i
+  for i in 1 2 3; do
+    out="$(hermes -p "$prof" chat -q "Reply with the single word OK" 2>&1)" && echo "$out" | grep -q "OK" && { ok "hermes $prof answers (try $i)"; return 0; }
+    echo "[$(date +%H:%M:%S)] hermes $prof try $i/3 failed; retrying in 10s"; sleep 10
+  done
+  echo "--- last output from hermes $prof ---"; echo "$out" | sed 's/\x1b\[[0-9;]*m//g' | grep -v '^\s*$' | tail -8
+  return 1
+}
+warm editor   || die "hermes editor did not answer after 3 tries (see output above; try the NEWSROOM_EXTRA_ARGS_EDITOR fallback model in DEMO_RUNBOOK section 3)"
+warm copydesk || die "hermes copydesk did not answer after 3 tries (see output above)"
 ( cd app && uv run --with pytest --with-editable . python -m pytest tests -q >/dev/null 2>&1 ) && ok "app tests pass (uv cache warm)" || die "app tests fail on main"
 
 step "5/6 Demo preflight (writes nothing to GitHub)"
