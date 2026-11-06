@@ -42,10 +42,14 @@ step "1/6 Repository"
 cd "$REPO_DIR" || die "cannot cd to $REPO_DIR"
 [ "$(git rev-parse --abbrev-ref HEAD)" = "main" ] || die "not on main (run: git switch main)"
 git branch --set-upstream-to=origin/main main >/dev/null 2>&1
-[ -z "$(git status --porcelain)" ] || die "working tree is not clean (commit or discard these first): $(git status --porcelain | head -3 | tr '\n' ' ')"
+# Edits under docs/ cannot affect the demo (the demo runs from a clean clone of origin/main), so they
+# are allowed and kept safe with --autostash. Any other uncommitted change blocks the run.
+dirty_code="$(git status --porcelain | grep -v -E '^.. docs/' || true)"
+[ -z "$dirty_code" ] || die "uncommitted changes outside docs/ (commit or discard these first): $(echo "$dirty_code" | head -3 | tr '\n' ' ')"
+[ -z "$(git status --porcelain)" ] || echo "[$(date +%H:%M:%S)] note: uncommitted docs/ edits present; they are kept (autostash)"
 pulled=0; pull_out=""
 for i in 1 2 3; do
-  if pull_out="$(git pull --rebase 2>&1)"; then pulled=1; break; fi
+  if pull_out="$(git pull --rebase --autostash 2>&1)"; then pulled=1; break; fi
   echo "[$(date +%H:%M:%S)] git pull try $i/3 failed; retrying in 5s"; sleep 5
 done
 [ "$pulled" -eq 1 ] || { echo "--- git said ---"; echo "$pull_out" | tail -5; die "git pull --rebase failed after 3 tries (network? see git message above)"; }
