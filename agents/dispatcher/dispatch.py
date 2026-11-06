@@ -848,9 +848,9 @@ class Dispatcher:
                 stdout, stderr = proc.communicate(timeout=timeout + 30)
                 text, code = (stdout or "") + (stderr or ""), proc.returncode
             except subprocess.TimeoutExpired as exc:
-                partial = (exc.stdout or "") + (exc.stderr or "")
-                if isinstance(partial, bytes):
-                    partial = partial.decode("utf-8", "replace")
+                partial = "".join(  # bytes on some platforms even in text mode
+                    x.decode("utf-8", "replace") if isinstance(x, bytes) else (x or "")
+                    for x in (exc.stdout, exc.stderr))
                 self._kill_tree(proc)
                 text, code = f"{partial}\ntimed out after {timeout + 30}s; outcome uncertain", 124
         except OSError as exc:

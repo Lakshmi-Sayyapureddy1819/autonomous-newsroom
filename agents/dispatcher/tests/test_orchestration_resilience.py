@@ -363,3 +363,27 @@ def test_factcheck_failure_never_reaches_ready_to_merge(tmp_path):
         d.tick()
     assert "status:ready-to-merge" not in labels_of(gh, 1)
     assert "factcheck" in log
+
+
+def test_timeout_with_bytes_partial_output_does_not_crash(tmp_path, monkeypatch):
+    """On Linux TimeoutExpired.stdout/stderr are bytes even in text mode (CI regression)."""
+    import subprocess
+
+    gh = FakeGH([issue(1, READY)])
+    d = make(tmp_path, gh, None, None, NEWSROOM_CMD_REPORTER="echo hi")
+
+    class FakeProc:
+        pid = 1
+        calls = 0
+
+        def communicate(self, timeout=None):
+            FakeProc.calls += 1
+            if FakeProc.calls == 1:
+                raise subprocess.TimeoutExpired("x", timeout, output=b"partial-out",
+                                                stderr=b"partial-err")
+            return "", ""
+
+    monkeypatch.setattr(dispatch.subprocess, "Popen", lambda *a, **k: FakeProc())
+    monkeypatch.setattr(dispatch.Dispatcher, "_kill_tree", staticmethod(lambda p: None))
+    code, out = d._run_subprocess("reporter", "1", "p")
+    assert code == 124 and "partial-out" in out and "partial-err" in out
