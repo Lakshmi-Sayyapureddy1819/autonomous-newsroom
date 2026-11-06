@@ -406,7 +406,60 @@ Single Hermes call: `hermes -z "<prompt>" --usage-file usage.json` writes a JSON
 
 ---
 
-## 11. One-screen cheat sheet
+## 11. Quick error fixes (errors seen in real rehearsals)
+
+### Habit that avoids most problems (run before every attempt)
+
+```bash
+cd /c/Users/Yasaswini/nr-repair
+git pull --rebase
+bash agents/demo/run_local_demo.sh --preflight-only
+```
+
+Continue only if every line says `ok`. Read any FAIL line: it usually names the fix.
+
+### 1. Pasting mistakes
+
+| What you see | Cause | Fix |
+|---|---|---|
+| `bash: Step: command not found`, `bash: Every: command not found` | Explanation text was pasted with the commands | Paste ONLY the code block, never the lines around it |
+| Output repeated several times | Same pasted text ran more than once | Open a fresh terminal, paste the block once |
+| A command does nothing | A `#` comment or stray line broke it | Run one block at a time |
+
+### 2. Git state
+
+| What you see | Cause | Fix |
+|---|---|---|
+| `FAIL this checkout is behind origin/main; run: git pull` | `origin/main` moved (for example after a merge) | `cd /c/Users/Yasaswini/nr-repair && git pull --rebase`, re-run preflight |
+| `There is no tracking information for the current branch` | Local `main` not linked to `origin/main` | `git branch --set-upstream-to=origin/main main` |
+| `git pull --ff-only` fails | Local commits make `main` ahead | Use `git pull --rebase` |
+| Prompt shows `(972c592...)` / not on `main` | In the old detached checkout | `cd /c/Users/Yasaswini/nr-repair && git switch main`. Always work from this folder |
+| `open PRs exist` (real) | A PR from an earlier run is still open | `gh pr list`, merge or close it by hand |
+
+### 3. Network and services
+
+| What you see | Cause | Fix |
+|---|---|---|
+| `Could not resolve host: github.com`, `git fetch failed`, `repo label missing`, `open PRs exist (?)` | DNS/Wi-Fi dropped mid-run. The label and PR lines are false alarms | `nslookup github.com`; switch to phone hotspot; re-run preflight. Do NOT create labels by hand |
+| `OpenClaw Gateway still not listening` | Gateway down or cold-starting | `openclaw gateway restart`, wait up to 4 min, `openclaw gateway health` |
+| `hermes has no 'editor' profile` / `hermes not on PATH` | Wrong shell or PATH | `type -a hermes` (expect `AppData/Local/hermes/bin/hermes`), then `hermes profile list` |
+| `gh authenticated` fails | Login expired | `gh auth login` |
+
+### 4. During the run
+
+| What you see | Fix |
+|---|---|
+| Script stops or terminal closes mid-run | Do not start over: `bash agents/demo/run_local_demo.sh --issue <N>` (Issue number it printed) |
+| 429 / quota error | Wait for one automatic retry. If it persists set the three `NEWSROOM_EXTRA_ARGS_*` exports (section 3), then resume |
+| `Gateway disconnected` / `turn outcome is unknown` | `openclaw gateway restart`, wait for port 18789, then resume. The dispatcher will not resend work |
+| Ticket becomes `status:blocked` | Designed escalation after 3 failures. Show its comment and say so |
+
+Never relabel secretly, merge a red gate, or fake a pass to get past an error. Showing how the
+system recovers or escalates scores better than a hidden manual fix.
+
+---
+
+## 12. One-screen cheat sheet
 
 ```bash
 cd /c/Users/Yasaswini/nr-repair && git pull --rebase && git status -sb
