@@ -241,7 +241,7 @@ def get_build_info() -> dict:
 
 @app.get("/agent-demo")
 def get_agent_demo() -> dict:
-    return {"service": "newsroom", "status": "ok"}
+    return {"service": "autonomous-newsroom", "status": "ok"}
 
 
 @app.get("/", response_class=HTMLResponse)
