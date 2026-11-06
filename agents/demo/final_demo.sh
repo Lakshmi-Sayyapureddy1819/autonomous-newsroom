@@ -42,8 +42,13 @@ step "1/6 Repository"
 cd "$REPO_DIR" || die "cannot cd to $REPO_DIR"
 [ "$(git rev-parse --abbrev-ref HEAD)" = "main" ] || die "not on main (run: git switch main)"
 git branch --set-upstream-to=origin/main main >/dev/null 2>&1
-git pull --rebase >/dev/null 2>&1 || die "git pull --rebase failed (network? local changes?)"
-[ -z "$(git status --porcelain)" ] || die "working tree is not clean: $(git status --porcelain | head -3 | tr '\n' ' ')"
+[ -z "$(git status --porcelain)" ] || die "working tree is not clean (commit or discard these first): $(git status --porcelain | head -3 | tr '\n' ' ')"
+pulled=0; pull_out=""
+for i in 1 2 3; do
+  if pull_out="$(git pull --rebase 2>&1)"; then pulled=1; break; fi
+  echo "[$(date +%H:%M:%S)] git pull try $i/3 failed; retrying in 5s"; sleep 5
+done
+[ "$pulled" -eq 1 ] || { echo "--- git said ---"; echo "$pull_out" | tail -5; die "git pull --rebase failed after 3 tries (network? see git message above)"; }
 ok "on main, synced, clean: $(git log --oneline -1)"
 git merge-base --is-ancestor origin/main HEAD || die "main does not contain origin/main"
 ok "main contains origin/main ($(git rev-parse --short origin/main))"
