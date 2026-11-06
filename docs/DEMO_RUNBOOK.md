@@ -310,7 +310,103 @@ cd app && uv run --with-editable . uvicorn newsroom.main:app --port 8000
 
 ---
 
-## 9. One-screen cheat sheet
+## 9. How failures loop (what the dispatcher does)
+
+Routing is plain code in `agents/dispatcher/editor_lifecycle.py` (no LLM, no tokens).
+
+| Event | What happens next |
+|---|---|
+| Copydesk finds a problem | `review:changes-requested` on the PR; ticket goes straight back to the Reporter, `attempt:2` |
+| Factcheck tests fail | `test:failed` on the PR; ticket goes straight back to the Reporter, `attempt:2` |
+| Reporter fixes it | Same branch, same PR (no new PR); old verdict labels cleared |
+| After the fix | Whole chain again: CI, Copydesk, Factcheck, Gate |
+| Third failure | `status:blocked` plus an escalation comment for a human; no agent is woken |
+
+Note: a Factcheck failure does NOT go through Copydesk first; it goes to the Reporter, and Copydesk
+re-reviews the next attempt. Verdict labels (`review:*`, `test:*`) live on the PR, Issue labels
+(`status:*`, `agent:*`, `attempt:*`) on the Issue.
+
+Interview one-liner: "On any failure the dispatcher sends the ticket back to the Reporter on the same
+PR, bumps the attempt, and the fix goes through Copydesk and Factcheck again. After three attempts it
+escalates to a human."
+
+Offline proof of these paths (37 tests, no network):
+
+```bash
+uv run --with pytest python -m pytest agents/dispatcher/tests -q -k "reroute or escalat or block or stale or retry or e2e or resilien or invalid or malformed or attempt"
+```
+
+---
+
+## 10. Token usage (see it directly)
+
+`sqlite3` is not installed on Windows and plain `python` is not on PATH. Use `uv run python`.
+
+### Built-in views
+
+```bash
+# Hermes: tokens, models, estimated cost per profile
+hermes -p editor   insights
+hermes -p copydesk insights
+hermes insights                     # default profile
+
+# OpenClaw: per-session tokens (context size, not lifetime)
+openclaw sessions --agent reporter
+openclaw sessions --agent factcheck
+openclaw sessions --all-agents
+openclaw sessions --all-agents --json
+```
+
+### Lifetime totals, Hermes + OpenClaw together
+
+```bash
+cd /c/Users/Yasaswini/nr-repair
+LOCALAPPDATA=$(cygpath -w ~/AppData/Local) uv run python agents/demo/token_total.py
+```
+
+PowerShell:
+
+```powershell
+uv run python C:\Users\Yasaswini\nr-repair\agents\demo\token_total.py
+```
+
+Sources it reads (read-only): Hermes `%LOCALAPPDATA%\hermes\[profiles\<p>\]state.db`
+(table `session_model_usage`); OpenClaw `~\.openclaw\agents\<agent>\agent\openclaw-agent.sqlite`
+(`usage` object inside `transcript_events`, plain or zstd-compressed; needs Python 3.14, which `uv run` uses).
+
+Reference output (2026-11-06, lifetime, all sessions on this machine):
+
+| Source | input | output | cache_read |
+|---|---|---|---|
+| HERMES total | 21,818,675 | 1,153,272 | 283,324,312 |
+| OPENCLAW total | 18,649,372 | 624,783 | 383,289,624 |
+| GRAND TOTAL | 40,468,047 | 1,778,055 | 666,613,936 |
+
+Input + output (excluding cache) = about 42.2M. `hermes/default` and `openclaw/main` include non-demo work;
+for the four-agent flow use editor, copydesk, reporter and factcheck only.
+
+### Cost of ONE demo
+
+1. Run `token_total.py` before the demo and save the output.
+2. Run it again after the demo.
+3. Subtract.
+
+Single Hermes call: `hermes -z "<prompt>" --usage-file usage.json` writes a JSON usage report (untested).
+
+### Honest caveats
+
+- Counts are runtime-reported, not provider billing. Authoritative: Google AI Studio usage and the
+  OpenRouter activity page. Hermes costs are estimates (some sessions have no pricing data).
+- `cache_read` is the same context re-read each turn. Quote input + output; do not add cache to it.
+- OpenClaw totals sum every event with a `usage` field. Not checked for duplicate events from
+  session branching or compaction.
+- Hermes and OpenClaw were assumed not to overlap.
+- Say: "About 42M input+output tokens by runtime-reported counters across both runtimes, lifetime,
+  mostly the Reporter. Runtime counts, not provider billing."
+
+---
+
+## 11. One-screen cheat sheet
 
 ```bash
 cd /c/Users/Yasaswini/nr-repair && git pull --rebase && git status -sb
@@ -323,4 +419,11 @@ bash agents/demo/run_local_demo.sh --issue <N>        # resume after any failure
 openclaw gateway restart                              # gateway stuck
 hermes gateway restart                                # hermes gateway stuck
 gh pr list ; gh pr checks <PR> ; gh pr view <PR> --web
+hermes -p editor insights ; hermes -p copydesk insights          # Hermes tokens + est. cost
+openclaw sessions --all-agents                                    # OpenClaw per-session tokens
+uv run python agents/demo/token_total.py                          # Hermes + OpenClaw lifetime totals
 ```
+
+
+
+uv run python C:\Users\Yasaswini\nr-tools\token_total.py
