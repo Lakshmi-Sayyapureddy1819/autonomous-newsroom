@@ -25,6 +25,16 @@ step() { printf '\n== %s ==\n' "$*"; }
 ok()   { printf '[%s] ok    %s\n' "$(date +%H:%M:%S)" "$*"; }
 die()  { printf '[%s] FAIL  %s\n' "$(date +%H:%M:%S)" "$*"; printf '\nStopped. Nothing was created. Fix the line above (see docs/DEMO_RUNBOOK.md section 11), then run this again.\n'; exit 1; }
 
+# Make sure the OpenClaw Gateway is healthy; restart it once if not (cold start can take ~2-4 min).
+ensure_gateway() {
+  openclaw gateway health 2>&1 | grep -q "OK" && return 0
+  echo "[$(date +%H:%M:%S)] Gateway not healthy; restarting (can take up to ~4 min)..."
+  openclaw gateway restart >/dev/null 2>&1
+  for _ in $(seq 1 48); do (echo > /dev/tcp/127.0.0.1/18789) 2>/dev/null && break; sleep 5; done
+  for _ in 1 2 3 4 5 6; do openclaw gateway health 2>&1 | grep -q "OK" && return 0; sleep 5; done
+  return 1
+}
+
 step "1/6 Repository"
 cd "$REPO_DIR" || die "cannot cd to $REPO_DIR"
 [ "$(git rev-parse --abbrev-ref HEAD)" = "main" ] || die "not on main (run: git switch main)"
@@ -56,13 +66,9 @@ ok "hermes profiles: editor, copydesk"
 agents="$(openclaw agents list 2>&1)"
 echo "$agents" | grep -q "reporter" && echo "$agents" | grep -q "factcheck" || die "openclaw agents 'reporter' and 'factcheck' not both registered"
 ok "openclaw agents: reporter, factcheck"
-if ! openclaw gateway health 2>&1 | grep -q "OK"; then
-  echo "Gateway not healthy; restarting once (can take up to ~2 min)..."
-  openclaw gateway restart >/dev/null 2>&1
-  for _ in $(seq 1 48); do (echo > /dev/tcp/127.0.0.1/18789) 2>/dev/null && break; sleep 5; done
-  openclaw gateway health 2>&1 | grep -q "OK" || die "OpenClaw Gateway still unhealthy"
-fi
+ensure_gateway || die "OpenClaw Gateway still unhealthy"
 ok "OpenClaw Gateway healthy"
+hermes gateway status >/dev/null 2>&1 && ok "hermes gateway running" || echo "note: 'hermes gateway status' reported a problem (one-shot agents may still work)"
 
 step "4/6 Warm-up (first model call is the slowest)"
 hermes -p editor chat -q "Reply with the single word OK" >/dev/null 2>&1 && ok "hermes editor answers" || die "hermes editor did not answer"
@@ -82,9 +88,30 @@ echo "Task: $TASK"
 echo "Started: $(date +%H:%M:%S)  (type CREATE when asked; the run takes about 15-25 minutes)"
 bash agents/demo/run_local_demo.sh --poll 5 --task "$TASK"
 rc=$?
+
+# Auto-recovery: if the run stopped (Gateway drop, agent error, network blip), fix the Gateway and
+# RESUME the same Issue (never a new --task, so no duplicate Issue or PR). Up to 3 resumes.
+tries=0
+while [ "$rc" -ne 0 ] && [ "$tries" -lt 3 ]; do
+  tries=$((tries + 1))
+  ISSUE_N="$(gh issue list --state open --json number --jq '.[0].number' 2>/dev/null)"
+  if [ -z "$ISSUE_N" ] || [ "$ISSUE_N" = "null" ]; then
+    echo "No Issue was created (the Editor step failed). Not retrying automatically, to avoid duplicates."
+    echo "Check 'gh issue list', fix the cause (see docs/DEMO_RUNBOOK.md section 11), then run this script again."
+    exit "$rc"
+  fi
+  if gh issue view "$ISSUE_N" --json labels --jq '[.labels[].name]|join(",")' 2>/dev/null | grep -q "status:blocked"; then
+    echo "Issue #$ISSUE_N is status:blocked (3 failed attempts): the designed escalation. Needs a human decision."
+    exit "$rc"
+  fi
+  echo; echo "[$(date +%H:%M:%S)] Run stopped (exit $rc). Auto-recovery $tries/3: fixing Gateway, resuming Issue #$ISSUE_N"
+  ensure_gateway || { echo "Gateway still unhealthy; stopping. Run: openclaw gateway restart, then: bash agents/demo/run_local_demo.sh --issue $ISSUE_N --poll 5"; exit 1; }
+  bash agents/demo/run_local_demo.sh --issue "$ISSUE_N" --poll 5
+  rc=$?
+done
 echo "Finished: $(date +%H:%M:%S)  (exit $rc)"
 if [ "$rc" -ne 0 ]; then
-  echo "Run stopped early. Resume with: bash agents/demo/run_local_demo.sh --issue <N> --poll 5"
+  echo "Still not complete after 3 auto-resumes. Resume by hand: bash agents/demo/run_local_demo.sh --issue <N> --poll 5"
   exit "$rc"
 fi
 cat <<'EOF'
