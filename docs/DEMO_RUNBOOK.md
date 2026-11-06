@@ -459,7 +459,85 @@ system recovers or escalates scores better than a hidden manual fix.
 
 ---
 
-## 12. One-screen cheat sheet
+## 12. Resume a stopped or interrupted run
+
+Use this when the script was stopped (Ctrl+C, closed terminal, network drop) or the agents paused
+part-way. Never start a new `--task`: that would create a second Issue and PR.
+
+### Step 1: find the ticket and see where it stopped
+
+```bash
+cd /c/Users/Yasaswini/nr-repair
+gh issue list --state open                      # the active ticket number N
+gh pr list --state open                         # its PR number
+gh issue view <N> --json labels --jq '[.labels[].name]|join(",")'
+gh pr view <PR> --json labels,statusCheckRollup --jq '"labels: \([.labels[].name]|join(",")) | checks: \([.statusCheckRollup[]?|"\(.name)=\(.conclusion // .status)"]|join(" "))"'
+```
+
+### Step 2: make sure nothing else is running and the services are up
+
+```bash
+tasklist | grep -i "bash.exe"                   # no other run_local_demo still running
+openclaw gateway health                         # expect OK
+```
+
+If the Gateway is down: `openclaw gateway restart`, wait for port 18789, check health again.
+
+### Step 3: resume (the only command you need)
+
+```bash
+cd /c/Users/Yasaswini/nr-repair
+bash agents/demo/run_local_demo.sh --issue <N> --poll 5
+```
+
+- No new Issue or PR is created. The Editor is skipped, since the ticket already exists.
+- The preflight runs in resume mode: the ticket's own PR is allowed; any OTHER open PR blocks it.
+- The dispatcher reads the labels and wakes whichever agent is next.
+- It stops at "READY FOR HUMAN MERGE" and never merges. You merge in the browser.
+- It is safe to run this command again if it stops again.
+
+### Where each stop point resumes
+
+| Issue labels | PR labels | Next agent woken |
+|---|---|---|
+| `status:ready, agent:reporter` | none | Reporter builds the PR |
+| `status:in-review, agent:copydesk` | none, CI green | Copydesk reviews |
+| `status:in-review, agent:copydesk` | `review:changes-requested` | Dispatcher re-routes to the Reporter, `attempt:2`, same PR |
+| `status:in-test, agent:factcheck` | `review:approved` | Factcheck tests the exact head |
+| `status:in-test, agent:factcheck` | `test:failed` | Dispatcher re-routes to the Reporter, `attempt:2`, same PR |
+| `status:ready-to-merge` | `review:approved, test:passed` | Nobody. Review and merge by hand |
+| `status:blocked` | any | Nobody (3 failed attempts). Human decision needed |
+
+### Real example (Issue #59)
+
+The run was stopped after Copydesk wrote `review:changes-requested` on PR #60 (the Reporter had edited
+`app/newsroom/main.py` and added a second test, which broke "do not change any other files"). The Issue
+still showed `status:in-review, agent:copydesk`. Resuming with `--issue 59` lets the dispatcher route it
+back to the Reporter on the same PR. This is the designed failure loop (section 9).
+
+### Before merging a resumed run
+
+```bash
+gh pr diff <PR> --name-only          # must list ONLY the files named in the task
+gh pr checks <PR>                    # ci and gate green
+gh pr view <PR> --json labels --jq '.[]|.[].name'   # review:approved and test:passed
+```
+
+If an out-of-scope file is still listed, do not merge.
+
+### If resume does not help
+
+| Symptom | Fix |
+|---|---|
+| `open PRs exist` for a PR that is not the ticket's | Close or merge the other PR, then resume |
+| `other tickets already active` | Finish or close the other ticket first (one active ticket at a time) |
+| `malformed labels; skipped` | Show the labels, say the dispatcher stops rather than guesses; fix by hand only openly |
+| `status:blocked` | Designed escalation. Show the dispatcher comment; do not relabel secretly |
+| Stale lock | `rm -rf ~/.local/state/newsroom-demo/demo.lock` and check `~/.local/state/newsroom-dispatch/locks` |
+
+---
+
+## 13. One-screen cheat sheet
 
 ```bash
 cd /c/Users/Yasaswini/nr-repair && git pull --rebase && git status -sb
