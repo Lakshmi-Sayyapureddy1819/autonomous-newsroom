@@ -9,5 +9,5 @@ def test_get_agent_demo_endpoint():
     assert response.status_code == 200
     assert response.headers["content-type"] == "application/json"
     data = response.json()
-    assert data["service"] == "autonomous-newsroom"
+    assert data["service"] == "newsroom"
     assert data["status"] == "ok"
