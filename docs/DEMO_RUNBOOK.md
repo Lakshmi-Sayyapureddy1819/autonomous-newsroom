@@ -294,8 +294,8 @@ Troubleshooting:
 | Page still shows the old UI | You did not pull after the merge, or the browser cached it: run `git pull --rebase`, restart the server and hard-refresh (Ctrl+Shift+R) |
 | See what is on a port | `cmd //c "netstat -ano" \| grep LISTENING \| grep ":8000 "` |
 
-Note: this exact command combination (new code plus the demo database on 8001) has not been
-fully tested end to end. Try it once before the interview.
+Note: this exact command combination (merged code plus the demo database on port 8001) was run
+by the owner on 2026-11-06 after PR #60 merged and worked. Repeat it once before the interview.
 
 ---
 
@@ -610,3 +610,21 @@ cd /c/Users/Yasaswini/nr-repair && git pull --rebase
 cd app && NEWSROOM_DB=C:/Users/Yasaswini/nr-demo-copy.sqlite3 uv run --with-editable . uvicorn newsroom.main:app --port 8001
 # open http://localhost:8001/   (Ctrl+C to stop)
 ```
+
+
+git pull --rebase
+>> git status -sb
+Current branch main is up to date.
+## main...origin/main [ahead 5]
+PS C:\Users\Yasaswini\nr-repair> git pull origin main
+From https://github.com/Lakshmi-Sayyapureddy1819/autonomous-newsroom
+ * branch            main       -> FETCH_HEAD
+Already up to date.
+PS C:\Users\Yasaswini\nr-repair> 
+
+
+
+
+cd C:\Users\Yasaswini\nr-repair\app
+$env:NEWSROOM_DB = "C:/Users/Yasaswini/nr-demo-copy.sqlite3"
+uv run --with-editable . uvicorn newsroom.main:app --port 8001
