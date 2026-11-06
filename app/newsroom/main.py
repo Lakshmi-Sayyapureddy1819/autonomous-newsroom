@@ -12,7 +12,7 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
-from newsroom.db import get_connection
+from newsroom.db import get_connection, init_db
 from newsroom.env import load_env
 
 
@@ -20,6 +20,8 @@ from newsroom.env import load_env
 async def lifespan(_app: FastAPI):
     # Load .env at server startup (not at import, so tests are unaffected).
     load_env()
+    # Initialize the database schema if it doesn't exist
+    init_db()
     yield
 
 
