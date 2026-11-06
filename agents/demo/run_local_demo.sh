@@ -112,6 +112,20 @@ if command -v hermes >/dev/null; then
 else
   bad "hermes not on PATH"
 fi
+# The Gateway can take 75-110 s to cold-start; "registered" is not "listening". Start it only if
+# nothing listens (never restart a healthy one) and wait, so the Reporter is not woken into a refusal.
+GW_PORT="${NEWSROOM_GATEWAY_PORT:-18789}"
+gw_up() { (exec 3<>"/dev/tcp/127.0.0.1/$GW_PORT") 2>/dev/null; }
+if command -v openclaw >/dev/null; then
+  if gw_up; then ok "OpenClaw Gateway listening on 127.0.0.1:$GW_PORT"
+  else
+    say "Gateway not listening; starting the service once and waiting (up to ${NEWSROOM_GATEWAY_WAIT:-240}s)"
+    timeout 60 openclaw gateway start >/dev/null 2>&1
+    gw_deadline=$((SECONDS + ${NEWSROOM_GATEWAY_WAIT:-240}))
+    until gw_up || [ "$SECONDS" -ge "$gw_deadline" ]; do sleep 5; done
+    gw_up && ok "OpenClaw Gateway listening on 127.0.0.1:$GW_PORT" || bad "OpenClaw Gateway still not listening on 127.0.0.1:$GW_PORT"
+  fi
+fi
 command -v openclaw >/dev/null && { echo "$oc" | grep -q '^- factcheck' && ok "openclaw agent 'factcheck' registered" || bad "openclaw has no 'factcheck' agent"; }
 for l in status:ready agent:reporter attempt:1 status:ready-to-merge review:approved test:passed; do
   gh_ label list --limit 100 --json name --jq '.[].name' 2>/dev/null | grep -qx "$l" || bad "repo label missing: $l"
