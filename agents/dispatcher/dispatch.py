@@ -21,7 +21,13 @@ Environment (all optional):
   NEWSROOM_CMD_<AGENT> (shell-style template with {issue}, {pr} and {prompt}),
   NEWSROOM_REVIEW_MODE=deterministic (copydesk/factcheck run agents/scripts/*_agent.py, no LLM;
   default is the LLM agents), NEWSROOM_AGENT_TIMEOUT (s, default 900), NEWSROOM_MAX_TURNS (default 40),
-  NEWSROOM_RETRY_BACKOFF (s, default 60), NEWSROOM_STALE_MINUTES (default 45),
+  NEWSROOM_AGENT_TIMEOUT_<AGENT> (per-agent override of the above, e.g. _REPORTER=1800),
+  NEWSROOM_RETRY_BACKOFF (s, default 60; doubles per failure, capped at 1h),
+  NEWSROOM_GATEWAY_PORT (default 18789), NEWSROOM_GATEWAY_WAIT (s to wait for a cold-starting
+  OpenClaw Gateway before an OpenClaw agent is woken, default 240), NEWSROOM_GATEWAY_AUTOSTART
+  (default 1: run `openclaw gateway start` once if nothing listens; a healthy Gateway is never
+  restarted), NEWSROOM_GITHUB_LAG_WAIT (s to re-poll GitHub for a PR an agent says it opened,
+  default 30), NEWSROOM_STALE_MINUTES (default 45),
   NEWSROOM_MALFORMED_GRACE (s, default 120), NEWSROOM_MAX_WAKES (default 9),
   NEWSROOM_SETTLE_SECONDS (s an uncertain agent outcome is awaited before a retry, default 600),
   NEWSROOM_EXTRA_ARGS_<AGENT> (shell-style args appended to that agent's command, e.g. a
@@ -37,6 +43,7 @@ import os
 import re
 import shlex
 import shutil
+import socket
 import subprocess
 import sys
 import threading
@@ -67,7 +74,8 @@ HANDOFF_TO = {
 # An agent run whose outcome cannot be read from its exit code: a timeout, or Hermes losing its
 # gateway ("Gateway disconnected; turn outcome is unknown ... do not resend the work").
 UNCERTAIN = re.compile(r"turn outcome is unknown|Gateway disconnected|keepalive ping timeout|"
-                       r"ConnectionClosed|outcome uncertain", re.IGNORECASE)
+                       r"ConnectionClosed|outcome uncertain|Gateway agent call connection closed|"
+                       r"Couldn't connect to OpenClaw|ECONNREFUSED", re.IGNORECASE)
 TRANSIENT_GH = re.compile(r"TLS handshake timeout|EOF|connection reset|timed? ?out|"
                           r"temporarily unavailable|HTTP 50[234]|no such host|dial tcp",
                           re.IGNORECASE)
@@ -76,6 +84,11 @@ SECRET = re.compile(r"(ghp_|gho_|github_pat_|sk-|AIza)[A-Za-z0-9_\-]{8,}")
 
 def sanitize(text: str, limit: int = 400) -> str:
     return SECRET.sub("[redacted]", text.strip())[-limit:]
+
+
+def redact(text: str) -> str:
+    """Mask credentials but keep EVERYTHING else (agent logs are stored untruncated)."""
+    return SECRET.sub("[redacted]", text)
 
 
 class Config:
@@ -95,7 +108,22 @@ class Config:
         self.malformed_grace = int(env.get("NEWSROOM_MALFORMED_GRACE", "120"))
         self.max_wakes = int(env.get("NEWSROOM_MAX_WAKES", "9"))
         self.settle = int(env.get("NEWSROOM_SETTLE_SECONDS", "600"))
+        self.gateway_port = int(env.get("NEWSROOM_GATEWAY_PORT",
+                                        env.get("OPENCLAW_GATEWAY_PORT", "18789")))
+        self.gateway_wait = int(env.get("NEWSROOM_GATEWAY_WAIT", "240"))
+        self.gateway_autostart = env.get("NEWSROOM_GATEWAY_AUTOSTART", "1") != "0"
+        self.lag_wait = int(env.get("NEWSROOM_GITHUB_LAG_WAIT", "30"))
         self.env = env
+
+    def timeout_for(self, agent: str) -> int:
+        return int(self.env.get(f"NEWSROOM_AGENT_TIMEOUT_{agent.upper()}", self.timeout))
+
+    def uses_gateway(self, agent: str) -> bool:
+        """True when the agent is the stock OpenClaw CLI (which needs the local Gateway)."""
+        if self.env.get(f"NEWSROOM_CMD_{agent.upper()}"):
+            return False
+        return agent in ("reporter", "factcheck") and not (
+            self.deterministic and agent in DETERMINISTIC)
 
     def needs_pr(self, agent: str) -> bool:
         """True when the agent is woken with its linked PR (reviewers always are)."""
@@ -114,7 +142,7 @@ class Config:
                     pr]
         elif agent in ("reporter", "factcheck"):  # OpenClaw
             argv = ["openclaw", "agent", "--agent", agent, "--message", prompt,
-                    "--timeout", str(self.timeout)]
+                    "--timeout", str(self.timeout_for(agent))]
         else:  # Hermes: copydesk, editor
             argv = ["hermes", "-p", agent, "chat", "-q", prompt, "--oneshot",
                     "--max-turns", str(self.max_turns)]
@@ -122,6 +150,49 @@ class Config:
             argv += shlex.split(self.env.get(f"NEWSROOM_EXTRA_ARGS_{agent.upper()}", ""))
         argv[0] = shutil.which(argv[0]) or argv[0]
         return argv
+
+
+class Gateway:
+    """The local OpenClaw Gateway. A cold start takes 75-110 s on the dev machine, during which
+    `openclaw agent` fails within seconds ("connection closed" / ECONNREFUSED) without the agent
+    having run. We probe the port, start the service ONLY if nothing listens, and wait."""
+
+    def __init__(self, cfg: Config, sleep=time.sleep, connect=None, starter=None):
+        self.cfg, self.sleep = cfg, sleep
+        self.connect = connect or (lambda: socket.create_connection(
+            ("127.0.0.1", cfg.gateway_port), timeout=2).close())
+        self.starter = starter or self._start_service
+
+    def up(self) -> bool:
+        try:
+            self.connect()
+            return True
+        except OSError:
+            return False
+
+    @staticmethod
+    def _start_service() -> None:
+        subprocess.run([shutil.which("openclaw") or "openclaw", "gateway", "start"],
+                       capture_output=True, timeout=60, check=False)
+
+    def ensure(self, log=print) -> bool:
+        if self.up():
+            return True  # healthy: never restarted
+        if self.cfg.gateway_autostart:
+            log(f"OpenClaw Gateway is not listening on 127.0.0.1:{self.cfg.gateway_port}; "
+                "starting the service once")
+            try:
+                self.starter()
+            except (OSError, subprocess.SubprocessError) as exc:
+                log(f"could not start the Gateway service: {sanitize(str(exc), 120)}")
+        waited = 0
+        while waited < self.cfg.gateway_wait:
+            if self.up():
+                log(f"OpenClaw Gateway is up after {waited}s")
+                return True
+            self.sleep(5)
+            waited += 5
+        return self.up()
 
 
 class GitHub:
@@ -338,11 +409,16 @@ def prompt_for(agent: str, number: int, t: lifecycle.Ticket | None, root: Path |
 
 
 class Dispatcher:
-    def __init__(self, cfg: Config, gh, dry_run: bool = False, runner=None, clock=time.time):
+    def __init__(self, cfg: Config, gh, dry_run: bool = False, runner=None, clock=time.time,
+                 sleep=None, gateway=None):
         self.cfg, self.gh, self.dry = cfg, gh, dry_run
         self.state = State(cfg.state_dir)
         self.run_agent = runner or self._run_subprocess
         self.now = clock
+        self.sleep = sleep or (lambda s: time.sleep(s))
+        # An injected runner (tests, NEWSROOM_CMD wrappers) owns its own transport.
+        self.gateway = gateway if gateway is not None else (
+            None if runner else Gateway(cfg, sleep=self.sleep))
         self.log_lock = threading.Lock()
 
     def log(self, msg: str) -> None:
@@ -383,6 +459,10 @@ class Dispatcher:
         if not prs:
             return None, f"no open PR closes #{issue}"
         return None, f"ambiguous: open PRs {sorted(prs)} all close #{issue}"
+
+    def _linked_prs_full(self, issue: int) -> list[dict]:
+        return [pr for pr in self.gh.open_prs()
+                if any(r["number"] == issue for r in pr.get("closingIssuesReferences") or [])]
 
     def _linked_prs(self, issue: int) -> list[int]:
         return [pr["number"] for pr in self.gh.open_prs()
@@ -442,9 +522,12 @@ class Dispatcher:
         if st["failures"] >= MAX_FAILURES:
             self._escalate(agent, key, number, st)
             return
-        wait = st["failures"] * self.cfg.backoff * (30 if st.get("rate_limited") else 1)
+        wait = min(3600, self.cfg.backoff * 2 ** max(st["failures"] - 1, 0)) * (
+            30 if st.get("rate_limited") else 1)
         if st["failures"] and self.now() < st.get("last_attempt", 0) + wait:
-            self.log(f"{key}: backing off after {st['failures']} failure(s)")
+            left = int(st.get("last_attempt", 0) + wait - self.now())
+            self.log(f"{key}: backing off after {st['failures']} failure(s) "
+                     f"({left}s left; last error: {st.get('last_error', 'n/a')[:200]})")
             return
         if self.dry:
             self.log(f"[dry-run] would wake {agent} for {key}")
@@ -458,7 +541,7 @@ class Dispatcher:
             self._escalate(agent, key, number, st)
             return
 
-        lock = AgentLock(self.state.dir, agent, self.cfg.timeout + 60)
+        lock = AgentLock(self.state.dir, agent, self.cfg.timeout_for(agent) + 60)
         if not lock.acquire():
             self.log(f"{agent} is already running; not waking it for {key}")
             return
@@ -471,6 +554,18 @@ class Dispatcher:
                     code, output = 2, why  # counts as a failed attempt; agent not started
                 else:
                     extra = {"pr": str(pr)}
+            elif agent == "reporter":
+                # The Reporter may start with no PR, but two PRs for one Issue is a duplicate.
+                _, why = self.resolve_pr(number)
+                if why.startswith("ambiguous"):
+                    code, output = 2, why
+            if code is None and self.gateway and self.cfg.uses_gateway(agent) \
+                    and not self.gateway.ensure(self.log):
+                # Infrastructure, not an agent failure: nothing was started, nothing is counted.
+                self.log(f"{key}: OpenClaw Gateway unreachable on 127.0.0.1:"
+                         f"{self.cfg.gateway_port} after {self.cfg.gateway_wait}s; NOT waking "
+                         f"{agent} (no failure counted; will retry next tick)")
+                return
             if code is None and agent == "reporter":
                 dirty = self._dirty(self.cfg.root)
                 if dirty:
@@ -488,11 +583,16 @@ class Dispatcher:
             st["rate_limited"] = bool(re.search(r"\b(402|429)\b", output))
             never_started = not before and t and code is not None and code != 0
             uncertain = code == 124 or bool(UNCERTAIN.search(output))
+            gateway_dead = False
+            if uncertain and code != 124 and self.gateway and self.cfg.uses_gateway(agent) \
+                    and not self.gateway.up():
+                # The Gateway is gone, so no turn can still be running: safe to retry later.
+                uncertain, gateway_dead = False, True
             if never_started:
                 problem = output  # no PR / dirty checkout: the agent was not started
             elif t:
                 try:  # re-read GitHub; may repair
-                    problem = self._evaluate(agent, number, before)
+                    problem = self._evaluate(agent, number, before, lag=code == 0)
                 except RuntimeError as exc:
                     problem, uncertain = f"could not read GitHub: {sanitize(str(exc), 120)}", True
             else:  # editor bootstrap: judged by what exists on GitHub, not by the exit code
@@ -516,10 +616,16 @@ class Dispatcher:
                 self.log(f"{key}: {agent} finished and the hand-off is valid")
             else:
                 st["failures"] += 1
-                detail = "" if never_started else f" (exit {code}: {output})" if code else ""
-                st["last_error"] = sanitize(f"{problem}{detail}")
+                if never_started:
+                    reason = problem
+                elif code:  # the invocation itself failed: say so first, GitHub's view second
+                    kind = "Gateway lost" if gateway_dead else "invocation failed"
+                    reason = f"{kind} (exit {code}): {sanitize(output, 300)} | GitHub: {problem}"
+                else:
+                    reason = problem
+                st["last_error"] = sanitize(reason, 700)
                 self.log(f"{key}: failure {st['failures']}/{MAX_FAILURES} "
-                         f"(exit {code}): {st['last_error'][:160]}")
+                         f"(exit {code}): {st['last_error']}")
             if st["failures"] >= MAX_FAILURES:
                 self._escalate(agent, key, number, st)
             self.state.save(key, st)
@@ -569,7 +675,7 @@ class Dispatcher:
         head = next((p.get("headRefOid") for p in self.gh.open_prs() if p["number"] == pr), None)
         return {"head": head, "activity": self.gh.activity(number, pr)}
 
-    def _evaluate(self, agent: str, number: int, before: dict) -> str:
+    def _evaluate(self, agent: str, number: int, before: dict, lag: bool = False) -> str:
         """Re-read GitHub after an invocation. '' if the agent left a valid hand-off, else why
         not. Only leftovers that the expected hand-off makes obsolete are repaired (stale
         status:*/agent:* on the Issue, status:*/agent:* on the PR) and every repair is logged
@@ -578,8 +684,15 @@ class Dispatcher:
         if issue is None:
             return ""  # closed meanwhile; nothing left to validate
         labels = {x["name"] for x in issue["labels"]}
-        prs = [p for p in self.gh.open_prs()
-               if any(r["number"] == number for r in p.get("closingIssuesReferences") or [])]
+        prs = self._linked_prs_full(number)
+        if lag and agent == "reporter" and not prs:
+            # The agent says it finished: GitHub may not index the new PR / its closing
+            # reference yet. Re-poll (never re-run the agent, which would open a duplicate).
+            for _ in range(self.cfg.lag_wait // 5):
+                self.sleep(5)
+                prs = self._linked_prs_full(number)
+                if prs:
+                    break
         if agent in PR_AGENTS and len(prs) != 1:
             return f"expected exactly one open PR closing #{number}, found {len(prs)}"
         pr = prs[0] if prs else None
@@ -722,22 +835,29 @@ class Dispatcher:
     def _run_subprocess(self, agent: str, issue: str, prompt: str,
                         pr: str = "") -> tuple[int, str]:
         argv = self.cfg.command(agent, issue, prompt, pr)
+        timeout = self.cfg.timeout_for(agent)
         log = self.state.dir / "logs" / f"{agent}-{issue}-{int(self.now())}.log"
         group = ({"creationflags": subprocess.CREATE_NEW_PROCESS_GROUP} if os.name == "nt"
                  else {"start_new_session": True})
+        started = self.now()
         try:
             proc = subprocess.Popen(argv, cwd=self.cfg.root, stdout=subprocess.PIPE,
                                     stderr=subprocess.PIPE, encoding="utf-8", errors="replace",
                                     **group)
             try:
-                stdout, stderr = proc.communicate(timeout=self.cfg.timeout + 30)
+                stdout, stderr = proc.communicate(timeout=timeout + 30)
                 text, code = (stdout or "") + (stderr or ""), proc.returncode
-            except subprocess.TimeoutExpired:
+            except subprocess.TimeoutExpired as exc:
+                partial = (exc.stdout or "") + (exc.stderr or "")
+                if isinstance(partial, bytes):
+                    partial = partial.decode("utf-8", "replace")
                 self._kill_tree(proc)
-                text, code = "timed out; outcome uncertain", 124
+                text, code = f"{partial}\ntimed out after {timeout + 30}s; outcome uncertain", 124
         except OSError as exc:
             text, code = f"could not start {argv[0]}: {exc}", 127
-        log.write_text(sanitize(text, 20000), encoding="utf-8")
+        header = (f"# agent={agent} issue={issue} pr={pr or '-'} exit={code} "
+                  f"seconds={int(self.now() - started)} timeout={timeout}\n")
+        log.write_text(redact(header + text), encoding="utf-8")  # complete, never truncated
         return code, text
 
     @staticmethod
