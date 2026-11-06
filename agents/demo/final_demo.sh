@@ -4,17 +4,20 @@
 #   bash agents/demo/final_demo.sh                 # checks + the default task (asks you to type CREATE)
 #   bash agents/demo/final_demo.sh --check-only    # checks + preflight only; creates nothing on GitHub
 #   bash agents/demo/final_demo.sh --task "..."    # your own task text
+#   bash agents/demo/final_demo.sh --skip-warmup   # skip the Hermes test prompts + app tests (run --check-only earlier)
 #
 # It stops at the first failed check. It never merges. You merge the PR yourself.
 set -uo pipefail
 
 REPO_DIR="/c/Users/Yasaswini/nr-repair"
 CHECK_ONLY=0
+SKIP_WARMUP=0
 TASK='In app/newsroom/templates/runs.html change the h1 text "Run log" to "Pipeline run log". Add app/tests/test_runs_heading.py with exactly one test that uses TestClient(app) from newsroom.main to GET "/runs" and asserts "Pipeline run log" is in response.text. Edit only these two files. Do not read, list or modify any other files, and do not run anything except pytest on the new test.'
 
 while [ $# -gt 0 ]; do
   case "$1" in
     --check-only) CHECK_ONLY=1 ;;
+    --skip-warmup) SKIP_WARMUP=1 ;;
     --task) TASK="${2:?--task needs text}"; shift ;;
     *) echo "unknown option: $1"; exit 2 ;;
   esac
@@ -81,9 +84,13 @@ warm() {
   echo "--- last output from hermes $prof ---"; echo "$out" | sed 's/\x1b\[[0-9;]*m//g' | grep -v '^\s*$' | tail -8
   return 1
 }
-warm editor   || die "hermes editor did not answer after 3 tries (see output above; try the NEWSROOM_EXTRA_ARGS_EDITOR fallback model in DEMO_RUNBOOK section 3)"
-warm copydesk || die "hermes copydesk did not answer after 3 tries (see output above)"
-( cd app && uv run --with pytest --with-editable . python -m pytest tests -q >/dev/null 2>&1 ) && ok "app tests pass (uv cache warm)" || die "app tests fail on main"
+if [ "$SKIP_WARMUP" -eq 1 ]; then
+  echo "[$(date +%H:%M:%S)] skipped (--skip-warmup): Hermes test prompts and app tests not run"
+else
+  warm editor   || die "hermes editor did not answer after 3 tries (see output above; try the NEWSROOM_EXTRA_ARGS_EDITOR fallback model in DEMO_RUNBOOK section 3)"
+  warm copydesk || die "hermes copydesk did not answer after 3 tries (see output above)"
+  ( cd app && uv run --with pytest --with-editable . python -m pytest tests -q >/dev/null 2>&1 ) && ok "app tests pass (uv cache warm)" || die "app tests fail on main"
+fi
 
 step "5/6 Demo preflight (writes nothing to GitHub)"
 bash agents/demo/run_local_demo.sh --preflight-only || die "demo preflight failed"
