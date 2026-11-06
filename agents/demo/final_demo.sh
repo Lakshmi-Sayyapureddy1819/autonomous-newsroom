@@ -1,0 +1,100 @@
+#!/usr/bin/env bash
+# One command for the live demo: sync, check everything, warm up, preflight, then run ONE task.
+#
+#   bash agents/demo/final_demo.sh                 # checks + the default task (asks you to type CREATE)
+#   bash agents/demo/final_demo.sh --check-only    # checks + preflight only; creates nothing on GitHub
+#   bash agents/demo/final_demo.sh --task "..."    # your own task text
+#
+# It stops at the first failed check. It never merges. You merge the PR yourself.
+set -uo pipefail
+
+REPO_DIR="/c/Users/Yasaswini/nr-repair"
+CHECK_ONLY=0
+TASK='In app/newsroom/templates/runs.html change the h1 text "Run log" to "Pipeline run log". Add app/tests/test_runs_heading.py with exactly one test that uses TestClient(app) from newsroom.main to GET "/runs" and asserts "Pipeline run log" is in response.text. Edit only these two files. Do not read, list or modify any other files, and do not run anything except pytest on the new test.'
+
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --check-only) CHECK_ONLY=1 ;;
+    --task) TASK="${2:?--task needs text}"; shift ;;
+    *) echo "unknown option: $1"; exit 2 ;;
+  esac
+  shift
+done
+
+step() { printf '\n== %s ==\n' "$*"; }
+ok()   { printf '[%s] ok    %s\n' "$(date +%H:%M:%S)" "$*"; }
+die()  { printf '[%s] FAIL  %s\n' "$(date +%H:%M:%S)" "$*"; printf '\nStopped. Nothing was created. Fix the line above (see docs/DEMO_RUNBOOK.md section 11), then run this again.\n'; exit 1; }
+
+step "1/6 Repository"
+cd "$REPO_DIR" || die "cannot cd to $REPO_DIR"
+[ "$(git rev-parse --abbrev-ref HEAD)" = "main" ] || die "not on main (run: git switch main)"
+git branch --set-upstream-to=origin/main main >/dev/null 2>&1
+git pull --rebase >/dev/null 2>&1 || die "git pull --rebase failed (network? local changes?)"
+[ -z "$(git status --porcelain)" ] || die "working tree is not clean: $(git status --porcelain | head -3 | tr '\n' ' ')"
+ok "on main, synced, clean: $(git log --oneline -1)"
+git merge-base --is-ancestor origin/main HEAD || die "main does not contain origin/main"
+ok "main contains origin/main ($(git rev-parse --short origin/main))"
+
+step "2/6 Network and GitHub"
+nslookup github.com >/dev/null 2>&1 || die "DNS: cannot resolve github.com (switch to the phone hotspot)"
+ok "github.com resolves"
+gh auth status >/dev/null 2>&1 || die "gh not logged in (run: gh auth login)"
+ok "gh authenticated"
+open_prs="$(gh pr list --state open --json number --jq 'length' 2>/dev/null)" || die "gh pr list failed (network?)"
+[ "$open_prs" = "0" ] || die "$open_prs open PR(s); merge or close them first (gh pr list)"
+ok "no open PRs"
+open_issues="$(gh issue list --state open --json number --jq 'length' 2>/dev/null)" || die "gh issue list failed"
+[ "$open_issues" = "0" ] || die "$open_issues open Issue(s); finish or close them first (gh issue list)"
+ok "no open Issues"
+
+step "3/6 Agents and services"
+command -v hermes >/dev/null || die "hermes not on PATH"
+case "$(command -v hermes)" in *AppData/Local/hermes/bin/hermes*) ok "hermes launcher: $(command -v hermes)";; *) die "unexpected hermes launcher: $(command -v hermes)";; esac
+profiles="$(hermes profile list 2>&1)"
+echo "$profiles" | grep -q "editor" && echo "$profiles" | grep -q "copydesk" || die "hermes profiles 'editor' and 'copydesk' not both present"
+ok "hermes profiles: editor, copydesk"
+agents="$(openclaw agents list 2>&1)"
+echo "$agents" | grep -q "reporter" && echo "$agents" | grep -q "factcheck" || die "openclaw agents 'reporter' and 'factcheck' not both registered"
+ok "openclaw agents: reporter, factcheck"
+if ! openclaw gateway health 2>&1 | grep -q "OK"; then
+  echo "Gateway not healthy; restarting once (can take up to ~2 min)..."
+  openclaw gateway restart >/dev/null 2>&1
+  for _ in $(seq 1 48); do (echo > /dev/tcp/127.0.0.1/18789) 2>/dev/null && break; sleep 5; done
+  openclaw gateway health 2>&1 | grep -q "OK" || die "OpenClaw Gateway still unhealthy"
+fi
+ok "OpenClaw Gateway healthy"
+
+step "4/6 Warm-up (first model call is the slowest)"
+hermes -p editor chat -q "Reply with the single word OK" >/dev/null 2>&1 && ok "hermes editor answers" || die "hermes editor did not answer"
+hermes -p copydesk chat -q "Reply with the single word OK" >/dev/null 2>&1 && ok "hermes copydesk answers" || die "hermes copydesk did not answer"
+( cd app && uv run --with pytest --with-editable . python -m pytest tests -q >/dev/null 2>&1 ) && ok "app tests pass (uv cache warm)" || die "app tests fail on main"
+
+step "5/6 Demo preflight (writes nothing to GitHub)"
+bash agents/demo/run_local_demo.sh --preflight-only || die "demo preflight failed"
+
+if [ "$CHECK_ONLY" -eq 1 ]; then
+  printf '\nAll checks passed. (--check-only: nothing was created.)\n'
+  exit 0
+fi
+
+step "6/6 Live run: Editor -> Dispatcher -> Reporter -> Copydesk -> Factcheck -> Gate"
+echo "Task: $TASK"
+echo "Started: $(date +%H:%M:%S)  (type CREATE when asked; the run takes about 15-25 minutes)"
+bash agents/demo/run_local_demo.sh --poll 5 --task "$TASK"
+rc=$?
+echo "Finished: $(date +%H:%M:%S)  (exit $rc)"
+if [ "$rc" -ne 0 ]; then
+  echo "Run stopped early. Resume with: bash agents/demo/run_local_demo.sh --issue <N> --poll 5"
+  exit "$rc"
+fi
+cat <<'EOF'
+
+Next (you, by hand):
+  gh pr list
+  gh pr diff <PR> --name-only          # exactly: runs.html and test_runs_heading.py
+  gh pr checks <PR>                    # ci and gate green
+  Merge in the browser, then:
+  cd /c/Users/Yasaswini/nr-repair && git pull --rebase
+  cd app && NEWSROOM_DB=C:/Users/Yasaswini/nr-demo-copy.sqlite3 uv run --with-editable . uvicorn newsroom.main:app --port 8001
+  open http://localhost:8001/runs      # heading should read "Pipeline run log"
+EOF

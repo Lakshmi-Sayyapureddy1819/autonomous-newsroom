@@ -628,3 +628,24 @@ PS C:\Users\Yasaswini\nr-repair>
 cd C:\Users\Yasaswini\nr-repair\app
 $env:NEWSROOM_DB = "C:/Users/Yasaswini/nr-demo-copy.sqlite3"
 uv run --with-editable . uvicorn newsroom.main:app --port 8001
+
+# Step 1: Enter the existing repository
+cd ~/autonomous-newsroom
+
+# Step 2: Check for unexpected local modifications
+git status --short
+
+# Step 3: Download the latest committed code from main
+git pull --ff-only origin main
+
+# Step 4: Deploy the updated application
+sudo bash ./deploy/install.sh
+
+# Step 5: Confirm the application is running
+sudo systemctl status newsroom-web.service --no-pager
+
+# Step 6: Test the local application
+curl -I http://127.0.0.1:8000/
+
+# Step 7: Test the public application
+curl -I https://34.10.175.17.sslip.io/
