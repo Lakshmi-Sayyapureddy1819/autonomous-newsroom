@@ -242,6 +242,61 @@ git status -sb                           # clean, on main
 gh issue list --state open               # the Issue should be closed by the merge
 ```
 
+### 7a. Show the merged change in the browser (do this right after you click Merge)
+
+Step 1: confirm the merge on GitHub (replace 60 and 59 with your PR and Issue numbers):
+
+```bash
+gh pr view 60 --json state,mergedAt --jq '"#60 \(.state) \(.mergedAt)"'     # expect MERGED
+gh issue view 59 --json state --jq .state                                   # expect CLOSED
+```
+
+Step 2: pull the merged code and confirm it is there (use a string from the task; this one is for the About link):
+
+```bash
+cd /c/Users/Yasaswini/nr-repair && git pull --rebase
+grep -c 'href="/version"' app/newsroom/templates/base.html                  # expect 1
+```
+
+Step 3: start the app on port 8001 with the demo database:
+
+```bash
+cd /c/Users/Yasaswini/nr-repair/app
+NEWSROOM_DB=C:/Users/Yasaswini/nr-demo-copy.sqlite3 uv run --with-editable . uvicorn newsroom.main:app --port 8001
+```
+
+Step 4: open `http://localhost:8001/` and check the change (for the About task the nav shows
+Home, Runs, About, RSS; clicking About opens `/version`, which returns `{"name":"Synapse", ...}`).
+Press Ctrl+C in that terminal to stop the server.
+
+Why these exact settings:
+
+| Setting | Reason |
+|---|---|
+| `NEWSROOM_DB=C:/Users/Yasaswini/nr-demo-copy.sqlite3` | A fresh checkout has no database: the home page returns 500 with `no such table: runs`. This copy already has tables and stories. |
+| `--port 8001` | Port 8000 may already be used by an older demo server running old code (no `/version`, no About link). |
+
+Quick checks from a second terminal:
+
+```bash
+curl -s localhost:8001/version                                   # {"name":"Synapse","tagline":"..."}
+curl -s -o /dev/null -w '%{http_code}\n' localhost:8001/         # 200
+curl -s localhost:8001/ | grep -c '>About<'                      # 1 once the About task is merged
+```
+
+Troubleshooting:
+
+| Symptom | Cause and fix |
+|---|---|
+| `/version` returns `{"detail":"Not Found"}` or no About link | You are hitting an OLD server. Check the port you opened; use 8001, or stop the old server on 8000 (Ctrl+C in its terminal, or `taskkill /PID <pid> /F`) |
+| `Errno 10048 ... only one usage of each socket address` | That port is taken. Use another port, for example `--port 8002`, and open that port |
+| Home page 500, `no such table: runs` | Missing `NEWSROOM_DB=...` (see the table above) |
+| Page still shows the old UI | You did not pull after the merge, or the browser cached it: run `git pull --rebase`, restart the server and hard-refresh (Ctrl+Shift+R) |
+| See what is on a port | `cmd //c "netstat -ano" \| grep LISTENING \| grep ":8000 "` |
+
+Note: this exact command combination (new code plus the demo database on 8001) has not been
+fully tested end to end. Try it once before the interview.
+
 ---
 
 ## 8. Demo test cases (pick ONE per run)
@@ -302,11 +357,7 @@ Be honest in the interview if the live outcome differs from the offline tests. T
 
 ### D. See the result in the browser after merge
 
-```bash
-cd /c/Users/Yasaswini/nr-repair && git pull --rebase
-cd app && uv run --with-editable . uvicorn newsroom.main:app --port 8000
-# then open http://localhost:8000/  and  http://localhost:8000/runs
-```
+Do this right after you click Merge. Full steps are in section 7.
 
 ---
 
@@ -553,8 +604,9 @@ gh pr list ; gh pr checks <PR> ; gh pr view <PR> --web
 hermes -p editor insights ; hermes -p copydesk insights          # Hermes tokens + est. cost
 openclaw sessions --all-agents                                    # OpenClaw per-session tokens
 uv run python agents/demo/token_total.py                          # Hermes + OpenClaw lifetime totals
+
+# After you merge: show the change locally (section 7a)
+cd /c/Users/Yasaswini/nr-repair && git pull --rebase
+cd app && NEWSROOM_DB=C:/Users/Yasaswini/nr-demo-copy.sqlite3 uv run --with-editable . uvicorn newsroom.main:app --port 8001
+# open http://localhost:8001/   (Ctrl+C to stop)
 ```
-
-
-
-uv run python C:\Users\Yasaswini\nr-tools\token_total.py
