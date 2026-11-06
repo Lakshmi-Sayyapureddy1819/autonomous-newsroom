@@ -244,6 +244,11 @@ def get_agent_demo() -> dict:
     return {"service": "autonomous-newsroom", "status": "ok"}
 
 
+@app.get("/health")
+def get_health() -> dict:
+    return {"status": "ok"}
+
+
 @app.get("/", response_class=HTMLResponse)
 def homepage(
     request: Request,
