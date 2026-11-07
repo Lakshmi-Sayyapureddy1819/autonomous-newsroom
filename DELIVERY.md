@@ -1,6 +1,6 @@
 # Autonomous Newsroom: Delivery Report
 
-*Verified against GitHub, the repository and local runtime records on November 2, 2026 (code on `main` as of `93dce88`; the docs-only PR #27 was merged afterwards as `831dfae`). All times are UTC.*
+*Verified against GitHub, the repository and local runtime records on November 2, 2026 (`main` at `93dce88`). All times are UTC.*
 
 **Contents**
 [1. Overview](#1-project-overview) · [2. Agent roster](#2-agent-roster) · [3. Architecture and workflow](#3-architecture-and-workflow) · [4. What was delivered](#4-implementation-delivered) · [5. Validation evidence](#5-validation-evidence) · [6. Failures and recovery](#6-failure-and-recovery) · [7. Deployment status](#7-deployment-status) · [8. Reproduction](#8-reproduction) · [9. Limitations and next steps](#9-limitations-and-next-steps) · [10. Conclusion](#10-conclusion)
@@ -131,7 +131,7 @@ Other artifacts in the repo:
 - **Agent configs and prompts:** [`agents/hermes/`](agents/hermes), [`agents/openclaw/`](agents/openclaw) (including `agents.example.json`), [`agents/bootstrap.sh`](agents/bootstrap.sh). Secrets are not in git.
 - **Deployment files:** [`deploy/`](deploy) (Caddyfile, `install.sh`, `newsroom-web`/`newsroom-refresh` systemd units), [`infra/`](infra) (Oracle Cloud Terraform), [`docs/DEPLOYMENT_RUNBOOK.md`](docs/DEPLOYMENT_RUNBOOK.md).
 - **Tests:** 70 passed and 1 skipped for the app, 46 passed for the dispatcher, `ruff` clean, all re-run on `main` at `93dce88` on November 2, 2026. The dispatcher tests use a fake GitHub and fake agents, so they test dispatcher logic, not live agents.
-- **Open and unstarted:** Issues #15–#18 (UI polish) were never started. PR #27 (docs) was merged at 14:20 UTC. PR #22, an earlier duplicate UI-polish PR whose files sat under a broken `UsersYasaswiniautonomous-newsroom-t4/` path and which carried no Synapse content, was closed unmerged at 12:16 UTC.
+- **Open and unstarted:** Issues #15–#18 (UI polish) were never started. PR #27 (docs) was open when this was written.
 
 ---
 
@@ -139,7 +139,7 @@ Other artifacts in the repo:
 
 ### 5.1 Where the agents ran
 
-The agent runtimes, the dispatcher and the validation runs all ran **on the owner's Windows laptop** (log paths are `C:/Users/...`, tests ran under `win32`, Python 3.14). They did not run on the cloud VM. This is the assignment's "own machine" fallback; no agent runtime was installed or validated on the VM.
+The agent runtimes, the dispatcher and the validation runs all ran **on the owner's Windows laptop** (log paths are `C:/Users/...`, tests ran under `win32`, Python 3.14). There is no evidence they ran on the cloud VM. This is the assignment's "own machine" fallback; no agent runtime was shown installed or validated on the VM (section 7.5).
 
 ### 5.2 The Issue #14 / PR #25 cycle (November 1, 2026)
 
@@ -198,17 +198,131 @@ The dispatcher invocation of each step is confirmed by the per-invocation logs. 
 
 ## 7. Deployment status
 
-| Item | Status |
-|---|---|
-| Public site | <https://34.10.175.17.sslip.io/> returned HTTP 200 on November 2, 2026 (checked from outside only): list page with article cards and "Updated 1 minute ago", and `/rss.xml?format=xml` returned HTTP 200 |
-| Re-check at 12:27 UTC | Repeated from outside: `GET /` HTTP 200 with 20 articles, "Updated 2 hours ago", title still "Autonomous Newsroom — AI news, summarized" and no "Synapse" on the page. `GET /rss.xml` HTTP 200, channel title "Autonomous Newsroom", `lastBuildDate` Mon, 02 Nov 2026 10:04:04 +0000, unchanged since an earlier 11:16 UTC check (consistent with an interval of several hours, not proof of a working timer) |
-| Hosting | A **Google Cloud (GCP) VM**, Ubuntu 24.04 x86_64, created by the owner outside this repository's Terraform. The stack follows `deploy/`: Caddy for HTTPS (`sslip.io` hostname for a Let's Encrypt certificate) in front of uvicorn on `127.0.0.1:8000`, plus a refresh timer. Machine type, region and free-tier/credit status are **not recorded here** |
-| Is it the latest `main`? | **No.** The live HTML contains no "Synapse" text, so it is the pre-branding build. The CSS extraction and mobile-nav fix from PR #25 and the branding from PR #26 are **not confirmed deployed**. A redeploy from `main` is outstanding |
-| Refresh schedule on the VM | The page's recent "updated" time suggests the refresh job runs. Timer state, interval and run history on the VM were **not inspected** |
-| Agents / dispatcher on the VM | **Not deployed or validated.** `dispatcher.service`/`.timer` and `bootstrap.sh` exist in the repo but were not shown running on the VM |
-| Oracle Cloud (Terraform) | Terraform files exist in [`infra/`](infra) but were never applied successfully. The local state (git-ignored) contains **networking resources only** (VCN, internet gateway, route table, security list, subnet): **no compute instance was ever created**, so the Oracle VM was not provisioned |
+The site runs on one Google Cloud (GCP) Compute Engine VM, created by hand (not by this repository's Terraform, which targets Oracle Cloud, see 7.6). VM values below were read from the VM terminal and the Google Cloud Console on November 2, 2026; public checks were run from outside the VM the same day.
 
-**Oracle "Out of host capacity".** What is verified: no Oracle instance exists in the Terraform state, and a `fault_domain` variable was added to `infra/` whose description names per-fault-domain "Out of host capacity" as the reason ([`infra/variables.tf`](infra/variables.tf)). What is **not** available: the saved error output, the dates, regions and availability domains tried, and the number of retries. The owner reports that capacity was the blocker; the repository does not contain proof of the individual attempts. The assignment's guidance for this case was to try other domains or sizes, then fall back to AWS, then to the owner's own machine; the project instead used a GCP VM for the site and the laptop for the agents.
+### 7.1 Architecture
+
+```mermaid
+flowchart TD
+    U["Internet clients"] -->|"HTTP :80 (308 to HTTPS)<br/>HTTPS :443"| FW["GCP VPC firewall rule<br/>newsroom-allow-web (tcp:80, tcp:443)"]
+    subgraph VM["GCP VM instance-20261102-070226 (us-central1-c)<br/>e2-standard-2, Ubuntu 24.04.5 LTS x86_64"]
+        FW --> CD["Caddy reverse proxy<br/>public listener :80 / :443<br/>Let's Encrypt cert for 34.10.175.17.sslip.io"]
+        CD -->|"reverse_proxy"| UV["newsroom-web.service<br/>Uvicorn + FastAPI<br/>127.0.0.1:8000 (localhost only)"]
+        UV --> DB[("SQLite<br/>/var/lib/newsroom/newsroom.sqlite3")]
+        RT["newsroom-refresh.timer (every 3 h)<br/>collector, then summarizer"] --> DB
+        APP["Live app code<br/>/opt/newsroom/app"] -.read by.-> UV
+        GIT["Git checkout<br/>/opt/newsroom-agent/repo"] -.manual copy.-> APP
+    end
+    RT -->|"HTTPS"| SRC["Google News RSS, Hacker News API"]
+    RT -->|"HTTPS"| LLM["LLM providers (primary and fallback)"]
+    LAP["Owner's Windows laptop<br/>Hermes, OpenClaw, dispatcher"] -->|"Issues, PRs, labels"| GH["GitHub repository"]
+    GH -.->|"git fetch (manual)"| GIT
+```
+
+- **Product on the VM:** Caddy, FastAPI/Uvicorn, SQLite and the refresh timer (collector then summarizer, writing the database the site reads).
+- **Agent pipeline:** the validated agent runs (Issue #14 / PR #25) ran from the owner's laptop, not the VM (section 5). `deploy/` and `agents/bootstrap.sh` describe how to host them on a VM, but the VM has **no dispatcher timer installed** (`systemctl list-timers --all` lists none).
+- **Deployment is manual.** The dashed arrows are a `git fetch` and a file copy, not a pipeline.
+
+### 7.2 VM and network configuration
+
+| Property | Value |
+|---|---|
+| VM name / status | `instance-20261102-070226`, running, created Nov 2, 2026 07:08 UTC |
+| Region / zone | `us-central1` / `us-central1-c` |
+| Machine type | `e2-standard-2`: 2 vCPUs, 8 GB memory (`free -h`: 7.7 GiB, no swap) |
+| CPU platform | Intel Broadwell (Xeon @ 2.20 GHz, KVM), x86_64 |
+| OS / image | Ubuntu 24.04.5 LTS (Noble), image `ubuntu-2404-noble-amd64-v20261024` |
+| Boot disk | Root filesystem 38 GB (8.7 GB used) |
+| External IP | `34.10.175.17`, served as `34.10.175.17.sslip.io` (a wildcard DNS name, no custom domain) |
+| VPC / network tags | `default` network; no network tags. The console HTTP/HTTPS checkboxes are off, so web access comes from the custom rule below |
+
+**Three separate layers control access:**
+
+| Layer | Name | Direction | Ports | Source | Target | Purpose |
+|---|---|---|---|---|---|---|
+| **GCP firewall rule** | `newsroom-allow-web` (network `default`, priority 1000, enabled) | Ingress, allow | tcp:80, tcp:443 | `0.0.0.0/0` | No target tags: all instances on the network | Lets the internet reach Caddy |
+| **Caddy public listener** | `caddy.service` | Inbound | :80 and :443; plain HTTP answers 308 to HTTPS | any | – | TLS termination, gzip, proxy to the app |
+| **Uvicorn localhost binding** | `newsroom-web.service` | Loopback only | `127.0.0.1:8000` | local | – | The app is not directly reachable from the internet |
+
+### 7.3 Application deployment procedure
+
+Two separate directories exist on the VM:
+
+| Path | Purpose |
+|---|---|
+| `/opt/newsroom-agent/repo` | **Git checkout** of this repository (GitHub `main`). It is not what the web service serves |
+| `/opt/newsroom/app` | **Running application code**, the working directory of `newsroom-web.service` ([`deploy/systemd/newsroom-web.service`](deploy/systemd/newsroom-web.service)). A plain copy, not a Git repository |
+
+A `git pull` in the checkout does not change the site until files are copied and the service is restarted. The repository's own deploy mechanism is [`deploy/install.sh`](deploy/install.sh) (idempotent: installs Caddy and packages, `rsync`s `app/` to `/opt/newsroom/app`, builds `/opt/newsroom/venv`, initialises SQLite, installs the systemd units, renders the Caddyfile for `<ip>.sslip.io`). There is no CI/CD job that deploys to the VM.
+
+**Synapse frontend update (done manually):**
+
+1. In `/opt/newsroom-agent/repo`: `git fetch origin`, then fast-forwarded `main` to `93dce88`.
+2. Copied the `app/newsroom` files into `/opt/newsroom/app/newsroom`.
+3. `sudo systemctl restart newsroom-web.service` (the service shows as started 13:17:45 UTC).
+4. Confirmed the served HTML contains Synapse branding and that a public GET returns HTTP 200 (re-checked in 7.5).
+
+This copy was a one-off manual step, not an automated pipeline.
+
+**Operating commands:**
+
+```bash
+systemctl status newsroom-web caddy --no-pager
+systemctl list-timers newsroom-refresh.timer
+journalctl -u newsroom-web -n 100 --no-pager
+sudo systemctl restart newsroom-web            # after copying new app files
+curl -s -o /dev/null -w '%{http_code}\n' https://34.10.175.17.sslip.io/
+```
+
+The app answers `HEAD` with 405, so use the `GET` form above for status checks.
+
+### 7.4 Agent setup and status
+
+Agent roles, models and the dispatcher design are in sections 2 and 3. Status of the autonomous workflow:
+
+| Stage | Status |
+|---|---|
+| Agent runtimes (Hermes 0.22.5, OpenClaw 2026.10.8), four roles configured | Done on the owner's laptop |
+| Dispatcher run against the real GitHub queue | Done on the laptop, each tick started manually |
+| Real ticket processed (Issue #14, PR #25) | Yes: LLM reporter opened the PR; Copydesk and Factcheck were deterministic scripts; gate green |
+| Human merge | Yes (owner merged PR #25 and PR #26) |
+| Agents and dispatcher on the VM | No `dispatcher.timer` is installed and no agent run on the VM is recorded |
+| Unattended, timer-driven operation | Not demonstrated |
+
+GitHub access for agents uses the owner's authenticated `gh` session (no credentials are stored in the repository). Retry behaviour (three failures, then `status:blocked`; backoff after HTTP 402/429) and the human-only merge policy are described in section 3.3 and enforced by the dispatcher code and the `gate` workflow.
+
+### 7.5 Deployment validation
+
+**Public checks** (from outside the VM, November 2, 2026, 13:32 UTC):
+
+| Check | Result |
+|---|---|
+| `GET /` | `200`; title "Synapse — Every AI story, in one line"; 20 articles; "Updated 26 minutes ago" |
+| `GET /rss.xml?format=xml`, `/runs` | `200`, `200` |
+| `GET /static/styles.css`, `/static/brand/synapse-logo.svg` | `200`, `200` |
+| `GET /nope` | `404` |
+| `GET http://34.10.175.17.sslip.io/` | `308` redirect to HTTPS |
+| TLS certificate | verified (curl `ssl_verify_result` 0) |
+| Response headers | `Server: Caddy` and `Server: uvicorn` |
+
+**On the VM** (terminal output, about 13:43 UTC):
+
+| Check | Result |
+|---|---|
+| `systemctl status newsroom-web.service` | enabled, active (running) since 13:17:45 UTC; `uvicorn newsroom.main:app` from `/opt/newsroom/venv` |
+| `systemctl status caddy` | enabled, active (running) since 09:35:14 UTC, config `/etc/caddy/Caddyfile` |
+| `systemctl list-timers --all` | `newsroom-refresh.timer` last ran 13:04 UTC, next 16:07 UTC; no `dispatcher.timer` |
+| Web service journal | the public requests above appear as 200/404 responses |
+
+**Tests:** dispatcher suite `46 passed`; app suite `70 passed, 1 skipped` and `ruff` clean (recorded at `93dce88`, section 4). They use fake GitHub and fake agents, so they test logic, not the VM or live agents.
+
+### 7.6 Oracle Cloud Terraform (not used)
+
+[`infra/`](infra) targets Oracle Cloud and was never applied successfully: the local state holds networking resources only and **no compute instance was created**. A `fault_domain` option was added for Oracle's "Out of host capacity" error ([`infra/variables.tf`](infra/variables.tf)); the owner reports capacity was the blocker, but no error logs or retry history were kept. The assignment's fallback was another provider, then the owner's machine; the site went to GCP and the agents ran on the laptop. The GCP VM and its firewall rule are not defined in this repository.
+
+### 7.7 Cost
+
+No billing data or free-tier/credit evidence exists in the repository, so this document states no cost. Agent token usage is in [docs/token-report.md](docs/token-report.md); it is runtime-reported, incomplete, and not a monetary cost.
 
 ---
 
@@ -237,8 +351,8 @@ Agent setup: create the Hermes profiles `editor` and `copydesk` from [`agents/he
 
 ### 8.2 Cloud path (not validated end to end)
 
-1. **Oracle path (not applied):** fill `infra/terraform.tfvars` from the example, pin an Ubuntu 24.04 aarch64 image OCID, then `terraform -chdir=infra init`, `validate`, `plan`, `apply` ([`infra/README.md`](infra/README.md)). Capacity may be unavailable (section 7).
-2. On any Ubuntu 24.04 VM: `sudo bash deploy/install.sh` installs Caddy, uvicorn and the refresh timer; put summarizer keys only in `/etc/newsroom.env`. This layout is what the GCP site follows, but the exact steps used on the GCP VM were not recorded.
+1. **Oracle path (not applied):** fill `infra/terraform.tfvars` from the example, pin an Ubuntu 24.04 aarch64 image OCID, then `terraform -chdir=infra init`, `validate`, `plan`, `apply` ([`infra/README.md`](infra/README.md)). Capacity may be unavailable (section 7.6).
+2. On any Ubuntu 24.04 VM: `sudo bash deploy/install.sh` installs Caddy, uvicorn and the refresh timer; put summarizer keys only in `/etc/newsroom.env`. This layout is what the GCP site follows; the original install commands on the GCP VM were not recorded.
 3. Agent side on a VM: `sudo bash agents/bootstrap.sh`, then authenticate `gh` and configure provider keys by hand, then install `agents/dispatcher/dispatcher.service` and `.timer`. See [`docs/DEPLOYMENT_RUNBOOK.md`](docs/DEPLOYMENT_RUNBOOK.md); its commands are marked unverified on a VM.
 
 ---
@@ -250,20 +364,20 @@ Agent setup: create the Hermes profiles `editor` and `copydesk` from [`agents/he
 - For PR #25, Copydesk and Factcheck were **scripts**. They check mechanics (one linked Issue, not a draft, no conflicts, green `ci`, ruff and pytest on the head). They do **not** check the acceptance criteria, UI behaviour or visual result, so the final PR's `review:approved` is not an LLM review.
 - The merged head `c892dd3` has no recorded agent review or test, and its agent trailers cannot be confirmed from runtime records.
 - Part of the final product (branding, PR #26) and the final PR #25 additions were human or Claude Code authored, not agent delivered.
-- The live site is not the latest `main`. No agent runtime or dispatcher runs on the VM. Oracle was never provisioned.
+- Only the website and refresh job run on the VM. No dispatcher timer is installed there and no agent run on the VM is recorded; the agents ran on the owner's laptop. Cost and credit data were not collected, so none is claimed.
+- The Synapse frontend was deployed by a one-off manual copy, not an automated pipeline (section 7.3).
 - Dedupe is by URL and by normalised headline only; paraphrased stories from different outlets are not merged.
-- Token numbers are runtime-reported and incomplete (see the report); no billing was checked.
+- Token numbers are runtime-reported and incomplete (see the report).
 
 **Next steps.**
-1. Redeploy the VM from `main` and record the VM type, region, refresh timer status and an `/runs` screenshot.
-2. Install the dispatcher timer on the VM and demonstrate one fully unattended ticket cycle.
-3. Give Copydesk a criteria-reading review that still works when the free model is rate-limited, instead of the mechanical fallback.
-4. Capture token usage in the dispatcher at the end of every invocation (Hermes `--usage-file`, OpenClaw session usage), keyed by agent, ticket, attempt and model.
-5. Add a path allowlist to `ci` so agent PRs cannot carry stray files, and have the dispatcher strip `agent:*` labels when a ticket closes.
-6. Repoint the reporter's `cwd` to a durable checkout.
+1. Move the agents and dispatcher timer onto the VM and demonstrate one fully unattended ticket cycle, replacing the manual frontend copy with `deploy/install.sh` or a CI deploy.
+2. Give Copydesk a criteria-reading review that still works when the free model is rate-limited, instead of the mechanical fallback.
+3. Capture token usage in the dispatcher at the end of every invocation (Hermes `--usage-file`, OpenClaw session usage), keyed by agent, ticket, attempt and model.
+4. Add a path allowlist to `ci` so agent PRs cannot carry stray files, and have the dispatcher strip `agent:*` labels when a ticket closes.
+5. Repoint the reporter's `cwd` to a durable checkout.
 
 ---
 
 ## 10. Conclusion
 
-A working, publicly reachable AI-news site exists, and its first five tickets (T0–T4), an RSS fix and a CSS refactor were delivered by a Hermes and OpenClaw team through GitHub Issues and PRs, with real review rejections (T2, T3, PR #13), automatic retry routing, a rate-limit escalation and a label-based merge gate. The one fully traced dispatcher-driven cycle (Issue #14, PR #25, head `3f57733`) used an LLM reporter and script reviewers, with every dispatcher tick started by hand on the owner's laptop. What is not delivered is just as important: unattended scheduling, agents on the VM, an Oracle VM, agent validation of the final merged head, and a redeploy of the latest `main`. The token report documents what usage can and cannot be recovered.
+A working, publicly reachable AI-news site exists, and its first five tickets (T0–T4), an RSS fix and a CSS refactor were delivered by a Hermes and OpenClaw team through GitHub Issues and PRs, with real review rejections (T2, T3, PR #13), automatic retry routing, a rate-limit escalation and a label-based merge gate. The one fully traced dispatcher-driven cycle (Issue #14, PR #25, head `3f57733`) used an LLM reporter and script reviewers, with every dispatcher tick started by hand on the owner's laptop. What is not delivered is just as important: unattended scheduling, agents on the VM, an Oracle VM, and agent validation of the final merged head. The site runs on a GCP VM (`e2-standard-2`, Ubuntu 24.04) behind Caddy and serves the latest `main` UI (Synapse). The token report documents what usage can and cannot be recovered.

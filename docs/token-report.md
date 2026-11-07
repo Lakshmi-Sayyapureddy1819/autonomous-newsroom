@@ -27,7 +27,6 @@
 | **All included usage** | **26,083,024** | **1,067,681** | **519,190,121** | **27,150,705** |
 
 **Important limitations.**
-
 - **These are runtime-reported counts, not provider billing.** No provider invoice or dashboard was checked, so **no dollar cost is claimed.** Most models used were free-tier; OpenClaw's cost field is 0/unpriced, and Hermes's cost field is its own pricing-table estimate (not reproduced here).
 - **Cache-read tokens are context re-read on every call of a long conversation, not new text.** They dominate the volume and are always shown separately.
 - Some usage is **unavailable**: Hermes calls that failed with HTTP 429 recorded zero; the earliest ticket work (T0–T2 editor and copydesk, T2/T3 factcheck) has no recorded session; the product's own summarizer stores no token counts.
@@ -144,13 +143,13 @@ The split follows the assignment's categories. A session is placed by what it di
 
 ### 5.1 What the records support
 
-| Run                                             | Runtime status | Input       | Output     | Cache-read    |
-| ----------------------------------------------- | -------------- | ----------: | ---------: | ------------: |
-| Reporter #12, `newsroom-reporter-12-1793506530` | failed         | 73,039      | 1,682      | 215,641       |
-| Reporter #12, `newsroom-reporter-12-1793506714` | failed         | 39,819      | 2,052      | 335,517       |
-| Reporter #12, `newsroom-reporter-12-1793508803` | failed         | 36,397      | 1,936      | 159,177       |
-| Reporter #14, `newsroom-reporter-14-1793509000` | failed         | 66,028      | 5,331      | 556,568       |
-| **Subtotal (marked** `failed`**)**              |                | **215,283** | **11,001** | **1,266,903** |
+| Run | Runtime status | Input | Output | Cache-read |
+|---|---|---:|---:|---:|
+| Reporter #12, `newsroom-reporter-12-1793506530` | failed | 73,039 | 1,682 | 215,641 |
+| Reporter #12, `newsroom-reporter-12-1793506714` | failed | 39,819 | 2,052 | 335,517 |
+| Reporter #12, `newsroom-reporter-12-1793508803` | failed | 36,397 | 1,936 | 159,177 |
+| Reporter #14, `newsroom-reporter-14-1793509000` | failed | 66,028 | 5,331 | 556,568 |
+| **Subtotal (marked `failed`)** | | **215,283** | **11,001** | **1,266,903** |
 
 Also verified as wasted: the **seven Copydesk task sessions** (Issues #12 and #14) that failed with HTTP 429 and recorded zero. The real count is unknown. Dispatcher state for Issue #14 shows a rate-limited Copydesk failure and two infrastructure failures.
 
@@ -176,8 +175,7 @@ The default reporter session of Nov 1–2 contains activity that lines up with t
 - **Consistency checks run:** OpenClaw `totalTokens = input + output + cache-read` on sampled sessions; Hermes session totals equal the main-work rows of `session_model_usage`; the per-ticket sums above were recomputed from raw message events, including events stored compressed, and match the figures in this report.
 
 **Corrections to earlier reports.**
-
-- The earlier estimate-only ledger (about 3,920 prompt / 1,870 completion tokens, model `qwen-2.5-coder-32b`) is superseded. **No runtime record shows** `qwen-2.5-coder-32b` **being used**, although six early commit trailers name it; treat that model as unsupported.
+- The earlier estimate-only ledger (about 3,920 prompt / 1,870 completion tokens, model `qwen-2.5-coder-32b`) is superseded. **No runtime record shows `qwen-2.5-coder-32b` being used**, although six early commit trailers name it; treat that model as unsupported.
 - A single "measured" figure of 32,423 input / 1,266 output / 73,637 cache-read quoted in an earlier `DELIVERY.md` was a diagnostic session (`diag-720865046`), not task usage. It is excluded.
 
 ---
@@ -185,15 +183,18 @@ The default reporter session of Nov 1–2 contains activity that lines up with t
 ## 7. Scope and exclusions
 
 **Included.**
-
 - Hermes sessions for the default, `editor` and `copydesk` profiles that were project work (planning, debugging, roster runs).
 - OpenClaw sessions for the `reporter` and `factcheck` agents, including dispatcher runs, default and dashboard sessions, and three archived sessions.
 
 **Excluded on purpose.**
-
-- **Diagnostics and probes:** four OpenClaw `diag-`* reporter sessions (133,951 input in total) and one `probe-*` session (13,345 input); six Hermes ping or status sessions ("Reply with exactly…" style).
+- **Diagnostics and probes:** four OpenClaw `diag-*` reporter sessions (133,951 input in total) and one `probe-*` session (13,345 input); six Hermes ping or status sessions ("Reply with exactly…" style).
 - **Unrelated work:** one Hermes session reviewing a personal document (271,557 input), which is in the same database and counted by `hermes insights`, but has nothing to do with this assignment.
 - **Hermes auxiliary calls** (`title_generation`, `approval`, `background_review`): Hermes keeps them outside the session totals. For the Day-1 planning session alone they add about 0.95M input and 15.7M cache-read tokens. They are excluded here, so Hermes figures are slightly understated.
 - Empty sessions with zero usage, and the OpenClaw default `main` system agent.
+
+**Not measured and not included.**
+- **Claude Code.** The audits, manual label corrections, the Synapse branding PR (#26) and the documentation edits were done in Claude Code sessions at the owner's direction. Neither runtime stores that usage, and no figure is available. It is **not** part of any number above.
+- **The product's own summarizer** (it stores only the model name per article).
+- **Provider billing data** (not checked) and any Hermes calls that failed before a response.
 
 **Data-quality notes.** Two Hermes copydesk sessions and two interactive sessions have no end time and could grow after this export. OpenClaw's mixed-model sessions are split by message model; Hermes mixed-model sessions are split by `session_model_usage`. Reading another program's SQLite store is an internal detail that may change between versions.
